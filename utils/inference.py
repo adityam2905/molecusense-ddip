@@ -131,6 +131,7 @@ class DDIInference:
         self.type_to_idx = self.meta.get("type_to_idx", {})
         self.idx_to_type = {v: k for k, v in self.type_to_idx.items()}
 
+
         # ── Load RL calibration agent (if available) ──────────────────────────
         self.rl_agent = None
         self.rl_meta = {}
@@ -164,6 +165,7 @@ class DDIInference:
         except Exception as e:
             print(f"[DDIInference] Could not load RL agent: {e}")
             self.rl_agent = None
+
 
     def _build_rl_state(self, emb_a, emb_b, base_prob, attn_a, attn_b):
         """
