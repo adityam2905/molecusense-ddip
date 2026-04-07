@@ -1,0 +1,340 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   🎨 ROOT THEME — Vibrant Dark Science Theme
+   ═══════════════════════════════════════════════════════════════════════ */
+:root {
+  --primary: #6c5ce7;
+  --primary-glow: rgba(108, 92, 231, 0.3);
+  --accent: #00cec9;
+  --accent-glow: rgba(0, 206, 201, 0.3);
+  --warning-orange: #fdcb6e;
+  --danger: #ff6b6b;
+  --success: #00b894;
+  --bg-dark: #0c0e1a;
+  --bg-card: rgba(20, 24, 44, 0.75);
+  --bg-glass: rgba(255, 255, 255, 0.04);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --text-primary: #e8e6f0;
+  --text-secondary: #a0a0c0;
+  --radius: 16px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🌌 FLOATING ATOM BACKGROUND ANIMATION
+   ═══════════════════════════════════════════════════════════════════════ */
+.floating-atoms {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.atom {
+  position: absolute;
+  border-radius: 50%;
+  opacity: 0.15;
+  animation: float-up linear infinite;
+}
+
+.atom::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  opacity: 0.5;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🎭 ATOM CONFIGS
+   ═══════════════════════════════════════════════════════════════════════ */
+.atom-1  { width:8px;  height:8px;  background:#6c5ce7; left:5%;   animation-duration:22s; animation-delay:0s;   color:#6c5ce7; }
+.atom-2  { width:12px; height:12px; background:#00cec9; left:15%;  animation-duration:18s; animation-delay:2s;   color:#00cec9; }
+.atom-3  { width:6px;  height:6px;  background:#fd79a8; left:25%;  animation-duration:25s; animation-delay:4s;   color:#fd79a8; }
+.atom-4  { width:10px; height:10px; background:#ffeaa7; left:35%;  animation-duration:20s; animation-delay:1s;   color:#ffeaa7; }
+.atom-5  { width:7px;  height:7px;  background:#74b9ff; left:45%;  animation-duration:23s; animation-delay:3s;   color:#74b9ff; }
+.atom-6  { width:14px; height:14px; background:#a29bfe; left:55%;  animation-duration:19s; animation-delay:5s;   color:#a29bfe; }
+.atom-7  { width:5px;  height:5px;  background:#55efc4; left:65%;  animation-duration:26s; animation-delay:0.5s; color:#55efc4; }
+.atom-8  { width:9px;  height:9px;  background:#fd79a8; left:75%;  animation-duration:21s; animation-delay:2.5s; color:#fd79a8; }
+.atom-9  { width:11px; height:11px; background:#00cec9; left:82%;  animation-duration:17s; animation-delay:4.5s; color:#00cec9; }
+.atom-10 { width:6px;  height:6px;  background:#dfe6e9; left:90%;  animation-duration:24s; animation-delay:1.5s; color:#dfe6e9; }
+.atom-11 { width:8px;  height:8px;  background:#6c5ce7; left:10%;  animation-duration:28s; animation-delay:6s;   color:#6c5ce7; }
+.atom-12 { width:13px; height:13px; background:#fdcb6e; left:50%;  animation-duration:16s; animation-delay:3.5s; color:#fdcb6e; }
+.atom-13 { width:7px;  height:7px;  background:#81ecec; left:70%;  animation-duration:22s; animation-delay:7s;   color:#81ecec; }
+.atom-14 { width:10px; height:10px; background:#fab1a0; left:30%;  animation-duration:20s; animation-delay:1.2s; color:#fab1a0; }
+.atom-15 { width:5px;  height:5px;  background:#74b9ff; left:88%;  animation-duration:27s; animation-delay:5.5s; color:#74b9ff; }
+
+.atom-1::after  { width:20px; height:20px; }
+.atom-2::after  { width:28px; height:28px; }
+.atom-3::after  { width:16px; height:16px; }
+.atom-4::after  { width:24px; height:24px; }
+.atom-5::after  { width:18px; height:18px; }
+.atom-6::after  { width:32px; height:32px; }
+.atom-7::after  { width:14px; height:14px; }
+.atom-8::after  { width:22px; height:22px; }
+.atom-9::after  { width:26px; height:26px; }
+.atom-10::after { width:16px; height:16px; }
+.atom-11::after { width:20px; height:20px; }
+.atom-12::after { width:30px; height:30px; }
+.atom-13::after { width:18px; height:18px; }
+.atom-14::after { width:24px; height:24px; }
+.atom-15::after { width:14px; height:14px; }
+
+@keyframes float-up {
+  0%   { transform: translateY(110vh) rotate(0deg) scale(0.5);   opacity: 0; }
+  10%  { opacity: 0.2; }
+  90%  { opacity: 0.15; }
+  100% { transform: translateY(-10vh) rotate(360deg) scale(1.2); opacity: 0; }
+}
+
+/* Molecular bond lines between atoms */
+.bond-line {
+  position: absolute;
+  height: 1px;
+  opacity: 0.06;
+  animation: bond-pulse 4s ease-in-out infinite;
+  transform-origin: left center;
+}
+.bond-1 { width:120px; background: linear-gradient(90deg, #6c5ce7, transparent); top:20%; left:8%;  transform: rotate(25deg);  animation-delay: 0s; }
+.bond-2 { width:80px;  background: linear-gradient(90deg, #00cec9, transparent); top:45%; left:40%; transform: rotate(-15deg); animation-delay: 1.5s; }
+.bond-3 { width:100px; background: linear-gradient(90deg, #fd79a8, transparent); top:70%; left:60%; transform: rotate(40deg);  animation-delay: 3s; }
+.bond-4 { width:60px;  background: linear-gradient(90deg, #ffeaa7, transparent); top:30%; left:75%; transform: rotate(-30deg); animation-delay: 0.8s; }
+
+@keyframes bond-pulse {
+  0%, 100% { opacity: 0.04; }
+  50%      { opacity: 0.12; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   🎭 GLOBAL STYLES — Dark theme, glassmorphism
+   ═══════════════════════════════════════════════════════════════════════ */
+.stApp {
+  background: linear-gradient(135deg, #0c0e1a 0%, #1a1033 30%, #0d1520 60%, #0c0e1a 100%) !important;
+  font-family: 'Inter', -apple-system, sans-serif !important;
+  color: var(--text-primary) !important;
+}
+
+.stApp > header { background: transparent !important; }
+
+.main .block-container {
+  position: relative;
+  z-index: 1;
+  padding-top: 2rem !important;
+}
+
+/* 📋 SIDEBAR */
+section[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #12102a 0%, #1a1535 50%, #0f0d20 100%) !important;
+  border-right: 1px solid rgba(108, 92, 231, 0.15) !important;
+}
+
+section[data-testid="stSidebar"] [data-testid="stSidebarNav"] {
+    background: transparent !important;
+}
+
+/* 📝 HEADINGS */
+.main h1 {
+  background: linear-gradient(135deg, #a29bfe 0%, #6c5ce7 30%, #00cec9 70%, #55efc4 100%) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 800 !important;
+  font-size: 2.4rem !important;
+  letter-spacing: -0.02em !important;
+  padding-bottom: 0.3em !important;
+}
+
+.main h2 {
+  color: #c8c4e0 !important;
+  font-weight: 700 !important;
+  font-size: 1.6rem !important;
+  border-bottom: 2px solid rgba(108, 92, 231, 0.2);
+  padding-bottom: 0.4em;
+}
+
+/* 📊 METRIC CARDS */
+[data-testid="stMetric"] {
+  background: linear-gradient(135deg, rgba(108,92,231,0.08), rgba(0,206,201,0.05)) !important;
+  border: 1px solid rgba(108, 92, 231, 0.2) !important;
+  border-radius: var(--radius) !important;
+  padding: 18px 20px !important;
+  backdrop-filter: blur(12px) !important;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.2), inset 0 1px 0 rgba(255,255,255,0.05) !important;
+}
+
+[data-testid="stMetricLabel"] {
+  color: var(--text-secondary) !important;
+  font-size: 0.8rem !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  font-weight: 600 !important;
+}
+
+/* 🔘 BUTTONS */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="baseButton-primary"] {
+  background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 50%, #00cec9 100%) !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 12px !important;
+  font-weight: 700 !important;
+  box-shadow: 0 4px 20px rgba(108, 92, 231, 0.35) !important;
+}
+
+/* 💊 RISK BADGES */
+.risk-high {
+  background: linear-gradient(135deg, rgba(255,107,107,0.15), rgba(255,107,107,0.05)) !important;
+  border: 1px solid rgba(255,107,107,0.25);
+  border-left: 4px solid #ff6b6b;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  color: #ff8787;
+  backdrop-filter: blur(12px);
+  animation: risk-glow-high 2s ease-in-out infinite alternate;
+}
+
+.risk-medium {
+  background: linear-gradient(135deg, rgba(253,203,110,0.12), rgba(253,203,110,0.04)) !important;
+  border: 1px solid rgba(253,203,110,0.25);
+  border-left: 4px solid #fdcb6e;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  color: #fdd86e;
+  backdrop-filter: blur(12px);
+  animation: risk-glow-medium 2s ease-in-out infinite alternate;
+}
+
+.risk-low {
+  background: linear-gradient(135deg, rgba(0,184,148,0.12), rgba(85,239,196,0.04)) !important;
+  border: 1px solid rgba(0,184,148,0.25);
+  border-left: 4px solid #00b894;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  color: #55efc4;
+  backdrop-filter: blur(12px);
+  animation: risk-glow-low 2s ease-in-out infinite alternate;
+}
+
+/* 🧠 RL CALIBRATION */
+.rl-box {
+  background: linear-gradient(135deg, rgba(108,92,231,0.12), rgba(162,155,254,0.06)) !important;
+  border: 1px solid rgba(108, 92, 231, 0.25);
+  border-left: 4px solid #a29bfe;
+  padding: 16px 20px;
+  border-radius: var(--radius);
+  color: #c8b6ff;
+  backdrop-filter: blur(12px);
+}
+
+.rl-badge {
+  background: linear-gradient(135deg, #6c5ce7, #a29bfe) !important;
+  color: white !important;
+  padding: 4px 14px;
+  border-radius: 20px;
+  font-size: 0.78em;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+/* 🌈 HERO SECTION */
+.hero-container {
+  text-align: center;
+  padding: 30px 20px;
+  margin-bottom: 20px;
+}
+
+.hero-title {
+  font-size: 2.6rem;
+  font-weight: 800;
+  background: linear-gradient(135deg, #a29bfe, #6c5ce7, #00cec9, #55efc4);
+  background-size: 300% 300%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradient-shift 6s ease infinite;
+}
+
+.hero-subtitle {
+  font-size: 1.05rem;
+  color: #8882b0;
+}
+
+.hero-badge {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 5px 18px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  border: 1px solid rgba(108, 92, 231, 0.3);
+  color: #a29bfe;
+  background: rgba(108, 92, 231, 0.08);
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* 💊 DRUG INPUT CARDS */
+.drug-card {
+  background: linear-gradient(135deg, rgba(20,24,44,0.9), rgba(15,15,35,0.7));
+  border: 1px solid rgba(108, 92, 231, 0.15);
+  border-radius: var(--radius);
+  padding: 24px;
+}
+
+.drug-card-title {
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.drug-card-title-a { color: #a29bfe; }
+.drug-card-title-b { color: #00cec9; }
+
+.drug-icon {
+  width: 32px; height: 32px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.drug-icon-a { background: rgba(108,92,231,0.2); }
+.drug-icon-b { background: rgba(0,206,201,0.2); }
+
+/* 🎯 RESULT SECTION */
+.result-header {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #c8c4e0;
+  margin: 24px 0 16px 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.result-header::before {
+  content: '';
+  width: 4px; height: 24px;
+  background: linear-gradient(180deg, #6c5ce7, #00cec9);
+  border-radius: 2px;
+}
+
+.step-box {
+  background: var(--bg-glass) !important;
+  border: 1px solid var(--border-glass);
+  padding: 20px;
+  border-radius: var(--radius);
+  margin-bottom: 20px;
+}
+
+@keyframes risk-glow-high { from { box-shadow: 0 4px 24px rgba(255,107,107,0.1); } to { box-shadow: 0 4px 32px rgba(255,107,107,0.25); } }
+@keyframes risk-glow-medium { from { box-shadow: 0 4px 24px rgba(253,203,110,0.1); } to { box-shadow: 0 4px 32px rgba(253,203,110,0.25); } }
+@keyframes risk-glow-low { from { box-shadow: 0 4px 24px rgba(0,184,148,0.1); } to { box-shadow: 0 4px 32px rgba(0,184,148,0.25); } }
