@@ -110,6 +110,22 @@ predict.py            CLI inference
 
 ---
 
+## Evaluation caveats
+
+- **Train/val/test splits are pair-level, not drug-level.** The same drug can
+  appear in both train and test (just paired with different partners), so
+  reported AUROC/F1 likely overstate generalization to genuinely unseen
+  drugs. A drug-disjoint ("cold-start") split is a more honest test of
+  real-world generalization if you need that number.
+- **Negative labels are heuristic, not verified.** "Non-interacting" pairs
+  are randomly sampled drug combinations that aren't in TWOSIDES' reported
+  interacting-pair set — absence of a report isn't proof of no interaction.
+  Treat negatives as "not documented as interacting," not as ground truth.
+- **Risk-level thresholds in `utils/inference.py` are unlabeled defaults**,
+  not derived from a calibration study. Tune them against a held-out
+  validation set before relying on the HIGH/MEDIUM/LOW labels for anything
+  beyond a rough screen.
+
 ## Disclaimer
 
 Research use only. Not a clinical tool.

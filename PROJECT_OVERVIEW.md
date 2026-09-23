@@ -83,6 +83,13 @@ improve confidence reliability for threshold-based screening or ranking.
 
 ## 8. Limitations
 - TWOSIDES labels are derived statistically and are not clinically verified.
+- Negative ("non-interacting") pairs are inferred by absence from TWOSIDES'
+  reported interacting-pair set, not confirmed to be safe combinations.
+- Train/val/test splits are pair-level: the same drug can appear across
+  splits paired with different partners, so reported metrics likely
+  overstate generalization to entirely unseen drugs (no cold-start split).
+- Risk-level thresholds are unlabeled defaults, not calibrated against a
+  validation study.
 - PubChem resolution can fail for ambiguous or uncommon drug names.
 - RL improvements depend on training size and data quality.
 - The system is intended for research use only and is not a clinical tool.

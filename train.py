@@ -76,7 +76,7 @@ def parse_args():
 
 # ── Epoch helpers ──────────────────────────────────────────────────────────────
 
-def run_epoch(model, loader, optimizer, criterion, device, train=True):
+def run_epoch(model, loader, optimizer, criterion, device, n_classes=1, train=True):
     model.train() if train else model.eval()
     total_loss  = 0.0
     all_probs, all_preds, all_labels = [], [], []
@@ -91,7 +91,7 @@ def run_epoch(model, loader, optimizer, criterion, device, train=True):
                 optimizer.zero_grad()
 
             logits = model(ba, bb)
-            loss   = criterion(logits, labels)
+            loss   = criterion(logits, labels.long()) if n_classes > 1 else criterion(logits, labels)
 
             if train:
                 loss.backward()
@@ -99,21 +99,38 @@ def run_epoch(model, loader, optimizer, criterion, device, train=True):
                 optimizer.step()
 
             total_loss += loss.item() * labels.size(0)
-            probs = torch.sigmoid(logits).detach().cpu().numpy()
-            preds = (probs >= 0.5).astype(int)
+
+            if n_classes > 1:
+                probs = torch.softmax(logits, dim=-1).detach().cpu().numpy()
+                preds = probs.argmax(axis=1)
+            else:
+                probs = torch.sigmoid(logits).detach().cpu().numpy()
+                preds = (probs >= 0.5).astype(int)
+
             all_probs.extend(probs.tolist())
             all_preds.extend(preds.tolist())
             all_labels.extend(labels.cpu().numpy().tolist())
 
     avg_loss = total_loss / max(len(loader.dataset), 1)
 
-    try:
-        auroc = roc_auc_score(all_labels, all_probs)
-        auprc = average_precision_score(all_labels, all_probs)
-    except ValueError:
-        auroc = auprc = float("nan")
+    if n_classes > 1:
+        # Binary AUROC/AUPRC don't apply directly to multi-class; use macro
+        # one-vs-rest AUROC and leave AUPRC undefined (nan) rather than
+        # silently computing a meaningless binary metric.
+        try:
+            auroc = roc_auc_score(all_labels, all_probs, multi_class="ovr", average="macro")
+        except ValueError:
+            auroc = float("nan")
+        auprc = float("nan")
+        f1  = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+    else:
+        try:
+            auroc = roc_auc_score(all_labels, all_probs)
+            auprc = average_precision_score(all_labels, all_probs)
+        except ValueError:
+            auroc = auprc = float("nan")
+        f1  = f1_score(all_labels, all_preds, zero_division=0)
 
-    f1  = f1_score(all_labels, all_preds, zero_division=0)
     acc = accuracy_score(all_labels, all_preds)
 
     return avg_loss, auroc, auprc, f1, acc
@@ -196,10 +213,20 @@ def train(args):
     ).to(device)
     print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}\n")
 
-    # Loss: handle imbalance with pos_weight
-    pos_w    = ds.pos_weight().to(device)
-    criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w)
-    print(f"pos_weight = {pos_w.item():.3f}")
+    # Loss: handle imbalance with pos_weight (binary) or class weights (multi-class)
+    if n_classes > 1:
+        train_labels = [int(ds.samples[i]["label"].item()) for i in train_ds.indices]
+        counts = np.bincount(train_labels, minlength=n_classes)
+        class_weights = torch.tensor(
+            len(train_labels) / (n_classes * np.maximum(counts, 1)),
+            dtype=torch.float, device=device,
+        )
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        print(f"class_weights = {[round(w, 3) for w in class_weights.tolist()]}")
+    else:
+        pos_w    = ds.pos_weight().to(device)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w)
+        print(f"pos_weight = {pos_w.item():.3f}")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
@@ -209,6 +236,7 @@ def train(args):
     # Training
     os.makedirs(args.save_dir, exist_ok=True)
     best_auroc   = 0.0
+    best_score   = -1.0  # metric actually used to pick the checkpoint (see below)
     patience_cnt = 0
     history      = {"train_loss": [], "val_loss": [], "val_auroc": [], "val_auprc": [], "val_f1": []}
 
@@ -220,10 +248,10 @@ def train(args):
         t0 = time.time()
 
         tr_loss, _, _, tr_f1, tr_acc = run_epoch(
-            model, train_loader, optimizer, criterion, device, train=True
+            model, train_loader, optimizer, criterion, device, n_classes=n_classes, train=True
         )
         vl_loss, vl_auroc, vl_auprc, vl_f1, vl_acc = run_epoch(
-            model, val_loader, optimizer, criterion, device, train=False
+            model, val_loader, optimizer, criterion, device, n_classes=n_classes, train=False
         )
 
         scheduler.step()
@@ -234,9 +262,16 @@ def train(args):
         history["val_auprc"].append(vl_auprc)
         history["val_f1"].append(vl_f1)
 
+        # AUROC can be undefined (NaN) for tiny or multi-class validation splits
+        # that don't contain every class — fall back to F1 so a checkpoint still
+        # gets saved instead of leaving best_model.pt missing at the end.
+        score = vl_auroc if not np.isnan(vl_auroc) else vl_f1
+
         flag = ""
-        if not np.isnan(vl_auroc) and vl_auroc > best_auroc:
-            best_auroc = vl_auroc
+        if score > best_score:
+            best_score = score
+            if not np.isnan(vl_auroc):
+                best_auroc = vl_auroc
             patience_cnt = 0
             torch.save(model.state_dict(), f"{args.save_dir}/best_model.pt")
             flag = " ✓"
@@ -252,11 +287,11 @@ def train(args):
             break
 
     # ── Test evaluation ──────────────────────────────────────────────────────
-    print(f"\nLoading best checkpoint (AUROC={best_auroc:.4f})...")
+    print(f"\nLoading best checkpoint (selection score={best_score:.4f}, AUROC={best_auroc:.4f})...")
     model.load_state_dict(torch.load(f"{args.save_dir}/best_model.pt", map_location=device))
 
     ts_loss, ts_auroc, ts_auprc, ts_f1, ts_acc = run_epoch(
-        model, test_loader, optimizer, criterion, device, train=False
+        model, test_loader, optimizer, criterion, device, n_classes=n_classes, train=False
     )
     print(f"\n{'─'*40}")
     print(f"  Test loss  : {ts_loss:.4f}")

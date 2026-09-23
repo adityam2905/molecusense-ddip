@@ -19,29 +19,14 @@ from utils.mol_graph import smiles_to_graph
 from models.gnn_ddi import DDIPredictor
 
 
-# Lower thresholds for quicker demos with small/undertrained models.
+# Unlabeled default thresholds, not derived from calibration. Before any
+# clinical-adjacent use, tune these against a held-out validation set (e.g.
+# via a precision/recall-vs-threshold sweep) rather than treating them as fixed.
 RISK_LEVELS = [
-    (0.42, "HIGH",   "Likely interaction — review carefully before co-administering"),
-    (0.35, "MEDIUM", "Possible interaction — use caution and monitor patient"),
+    (0.70, "HIGH",   "Likely interaction — review carefully before co-administering"),
+    (0.50, "MEDIUM", "Possible interaction — use caution and monitor patient"),
     (0.00, "LOW",    "Interaction unlikely based on molecular structure"),
 ]
-
-# Demo override list for known high-risk pairs.
-DEMO_HIGH_RISK_PAIRS = {
-    ("warfarin", "aspirin"),
-    ("warfarin", "ibuprofen"),
-    ("sildenafil", "nitroglycerin"),
-    ("simvastatin", "clarithromycin"),
-    ("lisinopril", "spironolactone"),
-}
-
-
-def _is_demo_high_risk(name_a: str | None, name_b: str | None) -> bool:
-    if not name_a or not name_b:
-        return False
-    a = name_a.strip().lower()
-    b = name_b.strip().lower()
-    return (a, b) in DEMO_HIGH_RISK_PAIRS or (b, a) in DEMO_HIGH_RISK_PAIRS
 
 
 def classify_risk(prob: float) -> dict:
@@ -303,12 +288,6 @@ class DDIInference:
 
         prob = final_prob
         risk = classify_risk(prob)
-        if _is_demo_high_risk(name_a, name_b):
-            risk = {
-                "level": "HIGH",
-                "description": "Known high-risk interaction (demo override)",
-                "probability": max(prob, 0.80),
-            }
 
         top_a = top_k_atoms(smiles_a, attn_a, k=5)
         top_b = top_k_atoms(smiles_b, attn_b, k=5)

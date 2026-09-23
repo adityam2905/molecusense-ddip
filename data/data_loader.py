@@ -197,6 +197,43 @@ def _add_negatives(df: pd.DataFrame, ratio: float = 1.0) -> pd.DataFrame:
     return pd.concat([df, neg_df], ignore_index=True).sample(frac=1, random_state=42)
 
 
+def _generate_negative_name_pairs(
+    names: list, exclude_pairs: set, n_neg: int, seed: int = 42
+) -> pd.DataFrame:
+    """
+    Sample random (name_a, name_b) pairs from `names`, rejecting any pair
+    present in `exclude_pairs` (normalized (min, max) name tuples).
+
+    Unlike `_add_negatives`, this is meant to be called with the FULL known-
+    interacting-pair universe as `exclude_pairs`, even when the positive set
+    being labeled has already been subsampled — so a pair that IS a real,
+    documented interaction (just not one that was sampled into the positive
+    set) never gets mislabeled as a negative.
+    """
+    rng = np.random.default_rng(seed)
+    names = list(names)
+    negatives = []
+    attempts = 0
+    max_attempts = max(n_neg * 20, 1000)
+
+    while len(negatives) < n_neg and attempts < max_attempts:
+        a, b = rng.choice(names, size=2, replace=False)
+        key = (a, b) if a <= b else (b, a)
+        if key not in exclude_pairs:
+            negatives.append({
+                "name_a": a, "name_b": b,
+                "label": 0, "interaction_type": "None",
+            })
+        attempts += 1
+
+    if len(negatives) < n_neg:
+        print(f"  [warn] Only generated {len(negatives)}/{n_neg} negative pairs "
+              f"after {attempts} attempts — the known-interacting-pair space "
+              f"may be densely covered by this drug pool.")
+
+    return pd.DataFrame(negatives, columns=["name_a", "name_b", "label", "interaction_type"])
+
+
 # ── TWOSIDES loader ────────────────────────────────────────────────────────────
 
 def _detect_twosides_columns(header: list[str]) -> dict:
@@ -277,8 +314,10 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
     2. Read in 500k-row chunks to keep memory low (full file is ~43M rows)
     3. Filter by PRR >= prr_threshold when PRR column is present
     4. Deduplicate drug pairs keeping highest-PRR side effect per pair
-    5. Sample max_pairs positive pairs
-    6. Generate equal-size random negative pairs
+    5. Sample max_pairs positive pairs (cache-aware)
+    6. Generate equal-size random negative pairs, checked against the FULL
+       deduplicated pair universe from step 4 (not just the max_pairs sample),
+       so a negative can never be a real interaction that wasn't sampled
     7. Fetch SMILES from PubChem for all unique drug names (cached locally)
 
     Parameters
@@ -346,14 +385,22 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
 
     # ── 5. Deduplicate pairs (keep strongest PRR side effect per pair) ────────
     df = df.sort_values("prr", ascending=False)
-    
+
     # Vectorized deduplication (much faster than df.apply on 33M rows)
     a = df["name_a"].values
     b = df["name_b"].values
     mask = a > b
     df["_p1"] = np.where(mask, b, a)
     df["_p2"] = np.where(mask, a, b)
-    df = df.drop_duplicates(subset=["_p1", "_p2"], keep="first").drop(columns=["_p1", "_p2", "prr"])
+    df = df.drop_duplicates(subset=["_p1", "_p2"], keep="first")
+
+    # Full universe of known-interacting name pairs (normalized, order-independent).
+    # We keep this from BEFORE subsampling so that negative sampling below can be
+    # checked against everything TWOSIDES reports as interacting, not just the
+    # max_pairs subset — otherwise a "negative" pair could just be a real
+    # interaction that happened not to be sampled into the positive set.
+    full_pos_pairs = set(zip(df["_p1"], df["_p2"]))
+    df = df.drop(columns=["_p1", "_p2", "prr"])
 
     print(f"  Unique drug pairs: {len(df):,}")
 
@@ -366,7 +413,8 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
         try:
             cache_df = pd.read_csv(cache_path)
             cached_names = set(cache_df[cache_df["smiles"].notna()]["name"].tolist())
-        except: pass
+        except Exception as e:
+            print(f"  [warn] Could not read SMILES cache at {cache_path}: {e}")
 
     def cache_score(row):
         score = 0
@@ -385,7 +433,21 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
     df["label"] = 1
     df = df[["name_a", "name_b", "label", "interaction_type"]].reset_index(drop=True)
 
-    # ── 7. PubChem SMILES lookup ──────────────────────────────────────────────
+    # ── 7. Negative sampling (name-space, checked against the FULL pair universe) ─
+    # Drawn from the same drug names as the sampled positives, so negatives stay
+    # plausible, but rejected against `full_pos_pairs` (every interacting pair
+    # TWOSIDES reports) rather than just this subsample — this avoids mislabeling
+    # a real, documented interaction as "no interaction".
+    pool_names = list(set(df["name_a"].tolist() + df["name_b"].tolist()))
+    neg_df = _generate_negative_name_pairs(
+        pool_names, full_pos_pairs, n_neg=len(df), seed=42
+    )
+    print(f"  Generated {len(neg_df):,} negative pairs "
+          f"(checked against {len(full_pos_pairs):,} known interacting pairs)")
+
+    df = pd.concat([df, neg_df], ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
+
+    # ── 8. PubChem SMILES lookup ──────────────────────────────────────────────
     all_names = list(set(df["name_a"].tolist() + df["name_b"].tolist()))
     print(f"  Unique drug names to look up: {len(all_names)}")
     smiles_map = batch_smiles_lookup(all_names)
@@ -405,9 +467,6 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
             "Check that drug names in the file are standard English names "
             "(not STITCH/CID IDs) and that you have internet access for PubChem."
         )
-
-    # ── 8. Add negatives ──────────────────────────────────────────────────────
-    df = _add_negatives(df)
 
     return df[["smiles_a", "smiles_b", "label", "interaction_type",
                "name_a", "name_b"]].reset_index(drop=True)
