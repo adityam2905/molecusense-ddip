@@ -109,9 +109,16 @@ def page_setup():
         data_path = st.text_input("Data Path", value="data/TWOSIDES.csv.gz")
         if st.button("Validate Dataset"):
             with st.spinner("Validating..."):
-                ok, msg = validate_twosides_file(data_path)
-                if ok: st.success(msg); st.session_state["validated_path"] = data_path
-                else: st.error(msg)
+                result = validate_twosides_file(data_path)
+                if result["ok"]:
+                    st.success(
+                        f"Detected format: {result['format']}  |  "
+                        f"~{result['n_rows']:,} rows  |  "
+                        f"columns: {', '.join(result['columns'])}"
+                    )
+                    st.session_state["validated_path"] = data_path
+                else:
+                    st.error(result["error"] or "Could not validate this file.")
 
     with st.expander("🧠 Step 2 — GNN Training", expanded=has_checkpoint()):
         st.markdown("### Training Parameters")

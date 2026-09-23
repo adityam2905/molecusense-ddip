@@ -79,6 +79,18 @@ def load_base_model(checkpoint_dir: str, device: torch.device) -> DDIPredictor:
     args = meta.get("args", {})
     n_classes = meta.get("n_classes", 1)
 
+    if n_classes != 1:
+        raise ValueError(
+            f"Base checkpoint in {checkpoint_dir} was trained with "
+            f"n_classes={n_classes} (multi-class interaction typing). "
+            "RL calibration only supports binary base models: its reward, "
+            "state, and action (a scalar delta added to a single base "
+            "probability) all assume a sigmoid output in [0, 1]. Applying it "
+            "to multi-class softmax logits would silently produce nonsense "
+            "adjustments rather than a real calibration. Train the base GNN "
+            "without --multiclass if you want RL calibration."
+        )
+
     model = DDIPredictor(
         hidden_dim=args.get("hidden", 64),
         embed_dim=args.get("embed", 256),
