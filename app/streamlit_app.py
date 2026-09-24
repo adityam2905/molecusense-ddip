@@ -15,6 +15,8 @@ import pandas as pd
 import streamlit as st
 from PIL import Image
 
+LIVE_APP_URL = "https://molecusense-ddip.streamlit.app/"
+
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
@@ -269,7 +271,8 @@ def page_info(model):
     st.markdown('<div class="result-header">Architecture Specs</div>', unsafe_allow_html=True)
     st.json({
         "Encoder": "GATConv x 3",
-        "Classifier": "MLP (512 -> 128 -> 1)",
+        "Pair combination": "[A + B, |A - B|] (same answer in either drug order)",
+        "Classifier": f"MLP (512 -> 128 -> {model.meta.get('n_classes', 1)})",
         "Attention Heads": model.meta.get("args", {}).get("heads", 4),
         "Hidden Dim": model.meta.get("args", {}).get("hidden", 64),
     })
@@ -285,6 +288,7 @@ def main():
     
     st.sidebar.markdown('<h1 style="margin-top:0">⚗️ MolecuSense</h1>', unsafe_allow_html=True)
     st.sidebar.caption("GAT + REINFORCE Calibration")
+    st.sidebar.link_button("🔗 Live app", LIVE_APP_URL, use_container_width=True)
     
     ckpt, rl = has_checkpoint(), has_rl()
     if ckpt: st.sidebar.success("GNN Loaded ✓")

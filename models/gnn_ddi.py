@@ -128,16 +128,22 @@ class MolGAT(nn.Module):
 
         emb = self.proj(pooled)  # [G, embed_dim]
 
-        # Build per-atom attention scores from last layer (averaged over targets)
+        # Build per-atom attention scores from last layer.
         if return_attention:
-            # aw3: [E, 1] attention weights
-            # For each atom, average the attention weights of edges pointing to it
+            # aw3: [E, 1] attention weights. GAT's softmax normalizes attention
+            # to sum to 1 over each TARGET node's incoming edges — so averaging
+            # by target (ei3[1]) is mathematically forced to equal 1/degree for
+            # every atom, regardless of what the network learned, and carries
+            # no information. Instead, average by SOURCE (ei3[0]): how much
+            # attention each atom receives from the different neighbors it
+            # contributes to. That total isn't constrained to any fixed value,
+            # so it actually reflects the learned attention pattern.
             n_atoms = x.shape[0]
-            targets = ei3[1]   # destination atoms
+            sources = ei3[0]   # atoms contributing to their neighbors' updates
             atom_scores = torch.zeros(n_atoms, device=x.device)
-            atom_scores.scatter_add_(0, targets, aw3.squeeze(-1))
+            atom_scores.scatter_add_(0, sources, aw3.squeeze(-1))
             counts = torch.zeros(n_atoms, device=x.device)
-            counts.scatter_add_(0, targets, torch.ones_like(aw3.squeeze(-1)))
+            counts.scatter_add_(0, sources, torch.ones_like(aw3.squeeze(-1)))
             atom_scores = atom_scores / (counts + 1e-8)
             self._last_attention = {"scores": atom_scores, "edge_index": ei3}
             return emb, atom_scores
@@ -173,7 +179,14 @@ class DDIPredictor(nn.Module):
             dropout=dropout,
         )
 
-        # Classifier: concat(emb_A, emb_B) → prediction
+        # Classifier: symmetric combination of (emb_A, emb_B) → prediction.
+        # Plain concat([emb_A, emb_B]) is NOT invariant to swapping A and B —
+        # [emb_a, emb_b] != [emb_b, emb_a] as vectors, so nothing forces the
+        # MLP to treat "A interacts with B" the same as "B interacts with A",
+        # even though drug-drug interaction is inherently a symmetric relation.
+        # (emb_a + emb_b) and |emb_a - emb_b| are both exactly swap-invariant
+        # by construction, so the order the two drugs are passed in can no
+        # longer change the prediction.
         clf_input = embed_dim * 2
         self.classifier = nn.Sequential(
             nn.Linear(clf_input, 512),
@@ -205,7 +218,7 @@ class DDIPredictor(nn.Module):
             emb_a = self.mol_gat(batch_a.x, batch_a.edge_index, batch_a.edge_attr, batch_a.batch)
             emb_b = self.mol_gat(batch_b.x, batch_b.edge_index, batch_b.edge_attr, batch_b.batch)
 
-        pair   = torch.cat([emb_a, emb_b], dim=1)
+        pair   = torch.cat([emb_a + emb_b, torch.abs(emb_a - emb_b)], dim=1)
         logits = self.classifier(pair)
 
         if self.n_classes == 1:

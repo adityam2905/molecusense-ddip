@@ -188,10 +188,14 @@ class DDIInference:
         else:
             base_prob_t = base_prob.unsqueeze(0).unsqueeze(1) if base_prob.dim() == 0 else base_prob.unsqueeze(1)
 
+        # Must exactly match DDIEnvironment._extract_state()'s symmetric
+        # construction in models/rl_agent.py (same reasoning: drug-drug
+        # interaction is unordered, so neither the state nor the probability
+        # it's built from should depend on which drug is "A" vs "B").
         state = torch.cat([
-            emb_a, emb_b,
+            emb_a + emb_b, torch.abs(emb_a - emb_b),
             base_prob_t,
-            attn_stats_a, attn_stats_b,
+            attn_stats_a + attn_stats_b, torch.abs(attn_stats_a - attn_stats_b),
             cos_sim, l2_dist,
         ], dim=1)
 

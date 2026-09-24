@@ -1,0 +1,53 @@
+{
+  "best_val_auroc": 0.7725715782978422,
+  "train_metrics": {
+    "loss": 0.5077372188568116,
+    "auroc": 0.8488209983856138,
+    "auprc": 0.8471771144622229,
+    "f1": 0.7769417166177783,
+    "accuracy": 0.7501428571428571
+  },
+  "val_metrics": {
+    "loss": 0.6151831846237182,
+    "auroc": 0.7725715782978422,
+    "auprc": 0.7774135384307296,
+    "f1": 0.7305336832895888,
+    "accuracy": 0.692
+  },
+  "test_metrics": {
+    "loss": 0.6095469274520874,
+    "auroc": 0.7780560100163606,
+    "auprc": 0.7862787345276553,
+    "f1": 0.7202797202797203,
+    "accuracy": 0.68
+  },
+  "test_auroc": 0.7780560100163606,
+  "test_auprc": 0.7862787345276553,
+  "split_sizes": [
+    7000,
+    2000,
+    1000
+  ],
+  "dataset_fingerprint": "47637e9382dfba09eaf13d845f61064bfd8c560750051fa76d2f9501f060e730",
+  "n_classes": 1,
+  "type_to_idx": {},
+  "args": {
+    "source": "twosides",
+    "data": "data/TWOSIDES.csv.gz",
+    "max_pairs": 5000,
+    "epochs": 50,
+    "lr": 0.001,
+    "batch": 32,
+    "hidden": 64,
+    "embed": 256,
+    "heads": 4,
+    "dropout": 0.3,
+    "val_frac": 0.2,
+    "test_frac": 0.1,
+    "seed": 42,
+    "patience": 10,
+    "multiclass": false,
+    "save_dir": "checkpoints",
+    "no_weighted_sampler": false
+  }
+}

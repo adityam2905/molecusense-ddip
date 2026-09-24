@@ -11,8 +11,9 @@ venv/
 # Data files
 /data/TWOSIDES.csv.gz
 
-# Model checkpoints
-/checkpoints/
+# Model checkpoints are committed (~3 MB) so the deployed app has a trained
+# model; only ignore stray experiment folders.
+/checkpoints_*/
 
 # OS / IDE
 .DS_Store

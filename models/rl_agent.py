@@ -158,12 +158,15 @@ class DDIEnvironment:
         """
         Build the RL state vector from a drug pair.
 
-        State components:
-          1. Drug A embedding (embed_dim)
-          2. Drug B embedding (embed_dim)
+        State components (all built to be symmetric under swapping A and B —
+        drug-drug interaction is an unordered relation, so the state the
+        policy sees, and the base probability it calibrates, must not depend
+        on which drug happened to be passed in as "A"):
+          1. emb_a + emb_b (embed_dim)
+          2. |emb_a - emb_b| (embed_dim)
           3. Base model probability (1)
-          4. Attention statistics for drug A: mean, std, max, min (4)
-          5. Attention statistics for drug B: mean, std, max, min (4)
+          4. attn_stats_a + attn_stats_b: mean, std, max, min (4)
+          5. |attn_stats_a - attn_stats_b|: mean, std, max, min (4)
           6. Embedding cosine similarity (1)
           7. Embedding L2 distance (1)
 
@@ -185,8 +188,10 @@ class DDIEnvironment:
                 return_attention=True
             )
 
-            # Base probability
-            pair = torch.cat([emb_a, emb_b], dim=1)
+            # Base probability — must match DDIPredictor.forward()'s symmetric
+            # combination exactly, or this recomputes a probability the
+            # classifier's trained weights were never fit to produce.
+            pair = torch.cat([emb_a + emb_b, torch.abs(emb_a - emb_b)], dim=1)
             logits = self.model.classifier(pair)
             if self.model.n_classes == 1:
                 logits = logits.squeeze(-1)
@@ -207,11 +212,11 @@ class DDIEnvironment:
         cos_sim = F.cosine_similarity(emb_a, emb_b, dim=1).unsqueeze(1)
         l2_dist = torch.norm(emb_a - emb_b, dim=1).unsqueeze(1)
 
-        # Compose full state
+        # Compose full state (symmetric — see docstring)
         state = torch.cat([
-            emb_a, emb_b,
+            emb_a + emb_b, torch.abs(emb_a - emb_b),
             base_prob.unsqueeze(0) if base_prob.dim() == 0 else base_prob.unsqueeze(1),
-            attn_stats_a, attn_stats_b,
+            attn_stats_a + attn_stats_b, torch.abs(attn_stats_a - attn_stats_b),
             cos_sim, l2_dist,
         ], dim=1)
 

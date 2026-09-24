@@ -286,20 +286,35 @@ def train(args):
             print(f"\nEarly stopping at epoch {epoch} (patience={args.patience})")
             break
 
-    # ── Test evaluation ──────────────────────────────────────────────────────
+    # ── Final evaluation (train / val / test, all in eval mode — no dropout,
+    #    no weighted resampling — so the three are directly comparable) ───────
     print(f"\nLoading best checkpoint (selection score={best_score:.4f}, AUROC={best_auroc:.4f})...")
     model.load_state_dict(torch.load(f"{args.save_dir}/best_model.pt", map_location=device))
 
+    # Clean, unweighted, unshuffled pass over the training set — the training
+    # DataLoader above uses a WeightedRandomSampler for gradient updates, which
+    # is not a fair "training accuracy" measurement on its own.
+    train_eval_loader = DataLoader(
+        train_ds, batch_size=args.batch, shuffle=False,
+        collate_fn=ddi_collate, num_workers=0,
+    )
+
+    tr_loss_f, tr_auroc_f, tr_auprc_f, tr_f1_f, tr_acc_f = run_epoch(
+        model, train_eval_loader, optimizer, criterion, device, n_classes=n_classes, train=False
+    )
+    vl_loss_f, vl_auroc_f, vl_auprc_f, vl_f1_f, vl_acc_f = run_epoch(
+        model, val_loader, optimizer, criterion, device, n_classes=n_classes, train=False
+    )
     ts_loss, ts_auroc, ts_auprc, ts_f1, ts_acc = run_epoch(
         model, test_loader, optimizer, criterion, device, n_classes=n_classes, train=False
     )
-    print(f"\n{'─'*40}")
-    print(f"  Test loss  : {ts_loss:.4f}")
-    print(f"  Test AUROC : {ts_auroc:.4f}")
-    print(f"  Test AUPRC : {ts_auprc:.4f}")
-    print(f"  Test F1    : {ts_f1:.4f}")
-    print(f"  Test Acc   : {ts_acc:.4f}")
-    print(f"{'─'*40}")
+
+    print(f"\n{'─'*62}")
+    print(f"  {'Split':<6} {'Loss':>8} {'AUROC':>8} {'AUPRC':>8} {'F1':>8} {'Accuracy':>10}")
+    print(f"  {'Train':<6} {tr_loss_f:>8.4f} {tr_auroc_f:>8.4f} {tr_auprc_f:>8.4f} {tr_f1_f:>8.4f} {tr_acc_f:>10.4f}")
+    print(f"  {'Val':<6} {vl_loss_f:>8.4f} {vl_auroc_f:>8.4f} {vl_auprc_f:>8.4f} {vl_f1_f:>8.4f} {vl_acc_f:>10.4f}")
+    print(f"  {'Test':<6} {ts_loss:>8.4f} {ts_auroc:>8.4f} {ts_auprc:>8.4f} {ts_f1:>8.4f} {ts_acc:>10.4f}")
+    print(f"{'─'*62}")
 
     # ── Save training curves ─────────────────────────────────────────────────
     _save_training_plot(history, args.save_dir)
@@ -307,8 +322,16 @@ def train(args):
     # ── Save metadata ────────────────────────────────────────────────────────
     meta = {
         "best_val_auroc": best_auroc,
+        "train_metrics": {"loss": tr_loss_f, "auroc": tr_auroc_f, "auprc": tr_auprc_f,
+                           "f1": tr_f1_f, "accuracy": tr_acc_f},
+        "val_metrics":   {"loss": vl_loss_f, "auroc": vl_auroc_f, "auprc": vl_auprc_f,
+                           "f1": vl_f1_f, "accuracy": vl_acc_f},
+        "test_metrics":  {"loss": ts_loss, "auroc": ts_auroc, "auprc": ts_auprc,
+                           "f1": ts_f1, "accuracy": ts_acc},
         "test_auroc":     ts_auroc,
         "test_auprc":     ts_auprc,
+        "split_sizes":    [n_train, n_val, n_test],
+        "dataset_fingerprint": ds.fingerprint(),
         "n_classes":      n_classes,
         "type_to_idx":    type_to_idx,
         "args":           vars(args),

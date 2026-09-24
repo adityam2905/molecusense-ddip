@@ -169,7 +169,10 @@ def load_drugbank(path: str) -> pd.DataFrame:
 def _add_negatives(df: pd.DataFrame, ratio: float = 1.0) -> pd.DataFrame:
     """
     Generate random negative drug pairs at a given positive:negative ratio.
-    Ensures no generated pair exists in the positive set.
+    Ensures no generated pair exists in the positive set, AND that no two
+    generated negatives are the same pair repeated (a duplicated pair would
+    otherwise risk landing in both train and test after random_split, which
+    is a direct train/test leak of the exact same graphs and label).
     """
     pos_set = set(
         zip(df["smiles_a"].tolist(), df["smiles_b"].tolist())
@@ -179,19 +182,26 @@ def _add_negatives(df: pd.DataFrame, ratio: float = 1.0) -> pd.DataFrame:
 
     n_neg = int(len(df) * ratio)
     negatives = []
+    seen = set()
     rng = np.random.default_rng(42)
 
     attempts = 0
     while len(negatives) < n_neg and attempts < n_neg * 10:
         a = rng.choice(all_smiles_a)
         b = rng.choice(all_smiles_b)
-        if (a, b) not in pos_set and (b, a) not in pos_set:
+        key = (a, b) if a <= b else (b, a)
+        if (a, b) not in pos_set and (b, a) not in pos_set and key not in seen:
+            seen.add(key)
             negatives.append({
                 "smiles_a": a, "smiles_b": b,
                 "label": 0, "interaction_type": "None",
                 "name_a": "", "name_b": "",
             })
         attempts += 1
+
+    if len(negatives) < n_neg:
+        print(f"  [warn] Only generated {len(negatives)}/{n_neg} negative pairs "
+              f"after {attempts} attempts.")
 
     neg_df = pd.DataFrame(negatives)
     return pd.concat([df, neg_df], ignore_index=True).sample(frac=1, random_state=42)
@@ -209,17 +219,24 @@ def _generate_negative_name_pairs(
     being labeled has already been subsampled — so a pair that IS a real,
     documented interaction (just not one that was sampled into the positive
     set) never gets mislabeled as a negative.
+
+    Also guards against generating the SAME negative pair more than once:
+    a repeated pair would otherwise risk landing in both train and test after
+    random_split, which is a direct train/test leak of the exact same graphs
+    and label.
     """
     rng = np.random.default_rng(seed)
     names = list(names)
     negatives = []
+    seen = set()
     attempts = 0
     max_attempts = max(n_neg * 20, 1000)
 
     while len(negatives) < n_neg and attempts < max_attempts:
         a, b = rng.choice(names, size=2, replace=False)
         key = (a, b) if a <= b else (b, a)
-        if key not in exclude_pairs:
+        if key not in exclude_pairs and key not in seen:
+            seen.add(key)
             negatives.append({
                 "name_a": a, "name_b": b,
                 "label": 0, "interaction_type": "None",
@@ -344,55 +361,70 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
                               col_map["side_effect"], col_map["prr"]]
                  if c is not None]
 
-    # ── 2. Chunked read ───────────────────────────────────────────────────────
-    chunks    = []
-    total_raw = 0
-    for chunk in pd.read_csv(path, chunksize=500_000, low_memory=False):
-        total_raw += len(chunk)
-        chunk = chunk[read_cols].copy()
-
-        # Filter by PRR if column exists
-        if col_map["prr"] and col_map["prr"] in chunk.columns:
-            chunk[col_map["prr"]] = pd.to_numeric(chunk[col_map["prr"]], errors="coerce")
-            chunk = chunk[chunk[col_map["prr"]] >= prr_threshold]
-
-        if len(chunk):
-            chunks.append(chunk)
-
-    df = pd.concat(chunks, ignore_index=True)
-    print(f"  Rows scanned: {total_raw:,} | After PRR filter: {len(df):,}")
-
-    # ── 3. Rename to standard columns ─────────────────────────────────────────
+    # ── 2-5. Chunked read + incremental PRR filter + dedup ───────────────────
+    # The real TWOSIDES file is ~43M rows and ~34M of them survive PRR>=2.0 —
+    # concatenating all filtered rows into one frame before deduping (the old
+    # approach) needs the whole thing in memory at once, which can exceed
+    # available RAM on ordinary hardware. Instead, reduce each 500k-row chunk
+    # down to one (max-PRR) row per drug pair immediately, then fold that into
+    # a running "best row per pair" frame — peak memory stays bounded by one
+    # chunk plus the unique-pair count seen so far, not the full file.
+    id_pattern = r"^\s*-?\d+\s*$"
     rename = {col_map["drug_a"]: "name_a", col_map["drug_b"]: "name_b"}
     if col_map["side_effect"]:
         rename[col_map["side_effect"]] = "interaction_type"
     if col_map["prr"]:
         rename[col_map["prr"]] = "prr"
-    df = df.rename(columns=rename)
 
-    if "interaction_type" not in df.columns:
-        df["interaction_type"] = "Drug interaction"
-    if "prr" not in df.columns:
-        df["prr"] = 1.0
+    running_best = None
+    total_raw = 0
+    total_after_prr = 0
 
-    # ── 4. Normalise drug names ───────────────────────────────────────────────
-    df["name_a"] = df["name_a"].astype(str).str.strip().str.title()
-    df["name_b"] = df["name_b"].astype(str).str.strip().str.title()
+    for chunk in pd.read_csv(path, chunksize=500_000, low_memory=False):
+        total_raw += len(chunk)
+        chunk = chunk[read_cols].copy()
 
-    # Remove rows where drug names are numeric IDs (STITCH IDs — can't look up)
-    id_pattern = r"^\s*-?\d+\s*$"
-    df = df[~df["name_a"].str.match(id_pattern) & ~df["name_b"].str.match(id_pattern)]
+        if col_map["prr"] and col_map["prr"] in chunk.columns:
+            chunk[col_map["prr"]] = pd.to_numeric(chunk[col_map["prr"]], errors="coerce")
+            chunk = chunk[chunk[col_map["prr"]] >= prr_threshold]
 
-    # ── 5. Deduplicate pairs (keep strongest PRR side effect per pair) ────────
-    df = df.sort_values("prr", ascending=False)
+        if len(chunk) == 0:
+            continue
+        total_after_prr += len(chunk)
 
-    # Vectorized deduplication (much faster than df.apply on 33M rows)
-    a = df["name_a"].values
-    b = df["name_b"].values
-    mask = a > b
-    df["_p1"] = np.where(mask, b, a)
-    df["_p2"] = np.where(mask, a, b)
-    df = df.drop_duplicates(subset=["_p1", "_p2"], keep="first")
+        chunk = chunk.rename(columns=rename)
+        if "interaction_type" not in chunk.columns:
+            chunk["interaction_type"] = "Drug interaction"
+        if "prr" not in chunk.columns:
+            chunk["prr"] = 1.0
+
+        chunk["name_a"] = chunk["name_a"].astype(str).str.strip().str.title()
+        chunk["name_b"] = chunk["name_b"].astype(str).str.strip().str.title()
+        chunk = chunk[~chunk["name_a"].str.match(id_pattern) & ~chunk["name_b"].str.match(id_pattern)]
+        if len(chunk) == 0:
+            continue
+
+        a = chunk["name_a"].values
+        b = chunk["name_b"].values
+        mask = a > b
+        chunk["_p1"] = np.where(mask, b, a)
+        chunk["_p2"] = np.where(mask, a, b)
+
+        # Reduce this chunk to one row per pair (cheap: at most 500k rows)
+        idx = chunk.groupby(["_p1", "_p2"])["prr"].idxmax()
+        chunk_best = chunk.loc[idx]
+
+        if running_best is None:
+            running_best = chunk_best
+        else:
+            combined = pd.concat([running_best, chunk_best], ignore_index=True)
+            idx2 = combined.groupby(["_p1", "_p2"])["prr"].idxmax()
+            running_best = combined.loc[idx2]
+
+    df = running_best if running_best is not None else pd.DataFrame(
+        columns=["name_a", "name_b", "interaction_type", "prr", "_p1", "_p2"]
+    )
+    print(f"  Rows scanned: {total_raw:,} | After PRR filter: {total_after_prr:,}")
 
     # Full universe of known-interacting name pairs (normalized, order-independent).
     # We keep this from BEFORE subsampling so that negative sampling below can be
@@ -438,7 +470,10 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
     # plausible, but rejected against `full_pos_pairs` (every interacting pair
     # TWOSIDES reports) rather than just this subsample — this avoids mislabeling
     # a real, documented interaction as "no interaction".
-    pool_names = list(set(df["name_a"].tolist() + df["name_b"].tolist()))
+    # sorted(), not list(set(...)): set iteration order for strings changes
+    # between Python processes (hash randomization), which silently made the
+    # seeded negative sampling produce different pairs on every run.
+    pool_names = sorted(set(df["name_a"].tolist() + df["name_b"].tolist()))
     neg_df = _generate_negative_name_pairs(
         pool_names, full_pos_pairs, n_neg=len(df), seed=42
     )

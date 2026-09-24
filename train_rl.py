@@ -43,11 +43,16 @@ def parse_args():
     p = argparse.ArgumentParser(description="Train RL calibration agent (Phase 7)")
     p.add_argument("--checkpoint_dir", default="checkpoints",
                    help="Directory with trained GNN checkpoint")
-    p.add_argument("--source",     default="twosides",
-                   choices=["toy", "drugbank", "twosides", "csv"])
-    p.add_argument("--data",       default=None, help="Path to data file")
-    p.add_argument("--max_pairs",  type=int, default=10000,
-                   help="Max positive drug pairs (same as train.py)")
+    p.add_argument("--source",     default=None,
+                   choices=["toy", "drugbank", "twosides", "csv"],
+                   help="Defaults to the source the GNN was trained on")
+    p.add_argument("--data",       default=None,
+                   help="Defaults to the data file the GNN was trained on")
+    p.add_argument("--max_pairs",  type=int, default=None,
+                   help="Defaults to the max_pairs the GNN was trained with")
+    p.add_argument("--select_frac", type=float, default=0.25,
+                   help="Fraction of the GNN's validation pairs held out for "
+                        "RL checkpoint selection (the rest train the RL policy)")
     p.add_argument("--episodes",   type=int, default=500,
                    help="Number of RL training episodes")
     p.add_argument("--lr",         type=float, default=3e-4,
@@ -130,7 +135,20 @@ def train_rl(args):
     base_model, meta = load_base_model(args.checkpoint_dir, device)
     embed_dim = meta.get("args", {}).get("embed", 256)
 
-    # ── Load data ────────────────────────────────────────────────────────────
+    # ── Load data (must be the exact dataset the GNN was trained on) ─────────
+    gnn_args = meta.get("args", {})
+    for name in ("source", "data", "max_pairs"):
+        given, trained = getattr(args, name), gnn_args.get(name)
+        if given is None:
+            setattr(args, name, trained)
+        elif trained is not None and given != trained:
+            raise ValueError(
+                f"--{name}={given!r} differs from the GNN's training value "
+                f"({trained!r}). RL must use the GNN's exact dataset so the "
+                "GNN's train/val/test split can be reproduced; otherwise RL "
+                "could train on pairs the GNN was tested on."
+            )
+
     print(f"\nLoading data (source={args.source})...")
     df = load_dataset(source=args.source, path=args.data, max_pairs=args.max_pairs)
     dataset_stats(df)
@@ -138,22 +156,52 @@ def train_rl(args):
     ds = DDIDataset(df=df)
     n = len(ds)
 
-    # Split: 80% RL training, 20% RL evaluation
-    n_eval = max(1, int(n * 0.2))
-    n_train = n - n_eval
-    train_ds, eval_ds = random_split(
-        ds, [n_train, n_eval],
-        generator=torch.Generator().manual_seed(args.seed)
+    # The split below is only leak-free if this is byte-for-byte the dataset
+    # the GNN was trained on — same sizes aren't enough (the pairs themselves
+    # can differ, e.g. if the SMILES cache changed).
+    expected_fp = meta.get("dataset_fingerprint")
+    if expected_fp is None:
+        raise RuntimeError(
+            "GNN checkpoint has no dataset_fingerprint, so there's no way to "
+            "confirm RL is splitting the same dataset. Retrain the GNN with "
+            "the current train.py first."
+        )
+    if ds.fingerprint() != expected_fp:
+        raise RuntimeError(
+            "Rebuilt dataset does not match the one the GNN was trained on "
+            "(fingerprint mismatch) — RL could end up training on the GNN's "
+            "test pairs. Retrain the GNN before training RL."
+        )
+
+    # Reproduce train.py's split exactly (same sizes, same order, same seed).
+    n_test = max(1, int(n * gnn_args.get("test_frac", 0.1)))
+    n_val = max(1, int(n * gnn_args.get("val_frac", 0.2)))
+    n_gnn_train = n - n_val - n_test
+    _, gnn_val_ds, gnn_test_ds = random_split(
+        ds, [n_gnn_train, n_val, n_test],
+        generator=torch.Generator().manual_seed(gnn_args.get("seed", 42)),
     )
-    print(f"RL split: {n_train} train / {n_eval} eval\n")
+
+    # The RL policy never touches the GNN's training pairs (the GNN is
+    # overconfident on those, so calibrating there would be biased) or its
+    # test pairs (kept untouched for the final, unbiased comparison). It is
+    # trained and checkpoint-selected entirely inside the GNN's val pairs.
+    n_select = max(1, int(len(gnn_val_ds) * args.select_frac))
+    rl_train_ds, rl_select_ds = random_split(
+        gnn_val_ds, [len(gnn_val_ds) - n_select, n_select],
+        generator=torch.Generator().manual_seed(args.seed),
+    )
+    print(f"RL split (inside GNN val): {len(rl_train_ds)} train / "
+          f"{len(rl_select_ds)} select  |  final test = GNN test ({len(gnn_test_ds)})\n")
 
     # ── Create RL components ─────────────────────────────────────────────────
     state_dim = get_state_dim(embed_dim)
     policy = RLPolicyNetwork(state_dim=state_dim)
     print(f"RL Policy parameters: {sum(p.numel() for p in policy.parameters()):,}")
 
-    train_env = DDIEnvironment(base_model, train_ds, device=device)
-    eval_env = DDIEnvironment(base_model, eval_ds, device=device)
+    train_env = DDIEnvironment(base_model, rl_train_ds, device=device)
+    select_env = DDIEnvironment(base_model, rl_select_ds, device=device)
+    test_env = DDIEnvironment(base_model, gnn_test_ds, device=device)
 
     trainer = RLTrainer(
         policy=policy,
@@ -201,7 +249,7 @@ def train_rl(args):
         if episode % args.eval_every == 0 or episode == 1:
             # Temporarily swap environment for evaluation
             trainer_env_backup = trainer.env
-            trainer.env = eval_env
+            trainer.env = select_env
             eval_stats = trainer.evaluate(batch_size=64)
             trainer.env = trainer_env_backup
 
@@ -223,7 +271,7 @@ def train_rl(args):
             print(f"{episode:>5}  {stats['loss']:>7.4f}  {stats['mean_reward']:>7.4f}  "
                   f"{stats['rl_accuracy']:>7.4f}  {stats['base_accuracy']:>7.4f}  "
                   f"{stats['mean_adjustment']:>+6.4f}  {stats['std_adjustment']:>6.4f}  "
-                  f"eval_acc={eval_stats['rl_accuracy']:.4f}  "
+                  f"select_acc={eval_stats['rl_accuracy']:.4f}  "
                   f"{time.time()-t0:.1f}s{flag}")
         else:
             print(f"{episode:>5}  {stats['loss']:>7.4f}  {stats['mean_reward']:>7.4f}  "
@@ -242,22 +290,33 @@ def train_rl(args):
     if os.path.exists(rl_path):
         policy.load_state_dict(torch.load(rl_path, map_location=device))
 
-    trainer.env = eval_env
-    final_eval = trainer.evaluate(batch_size=64)
+    trainer.env = select_env
+    select_eval = trainer.evaluate(batch_size=64)
 
-    print(f"\n  Final RL accuracy  : {final_eval['rl_accuracy']:.4f}")
-    print(f"  Base GNN accuracy  : {final_eval['base_accuracy']:.4f}")
+    # The GNN test pairs were never used to train or select the RL policy,
+    # so this is the only unbiased estimate of what RL calibration adds.
+    trainer.env = test_env
+    final_eval = trainer.evaluate(batch_size=64)
     improvement = final_eval['rl_accuracy'] - final_eval['base_accuracy']
-    print(f"  Improvement        : {improvement:+.4f} ({improvement*100:+.1f}%)")
-    print(f"  Mean reward        : {final_eval['mean_reward']:.4f}")
+
+    print(f"\n  Selection set ({select_eval['n_samples']} pairs, used to pick the policy — optimistic):")
+    print(f"    Base {select_eval['base_accuracy']:.4f}  ->  RL {select_eval['rl_accuracy']:.4f}")
+    print(f"  GNN test set ({final_eval['n_samples']} pairs, never seen by RL — unbiased):")
+    print(f"    Base GNN accuracy  : {final_eval['base_accuracy']:.4f}")
+    print(f"    RL accuracy        : {final_eval['rl_accuracy']:.4f}")
+    print(f"    Improvement        : {improvement:+.4f} ({improvement*100:+.1f}%)")
     print(f"{'─'*50}")
 
     # ── Save RL metadata ─────────────────────────────────────────────────────
     rl_meta = {
-        "best_eval_accuracy": best_eval_acc,
-        "final_rl_accuracy": final_eval["rl_accuracy"],
-        "final_base_accuracy": final_eval["base_accuracy"],
+        "best_select_accuracy": best_eval_acc,
+        "select_rl_accuracy": select_eval["rl_accuracy"],
+        "select_base_accuracy": select_eval["base_accuracy"],
+        "test_rl_accuracy": final_eval["rl_accuracy"],
+        "test_base_accuracy": final_eval["base_accuracy"],
         "improvement": improvement,
+        "split": {"rl_train": len(rl_train_ds), "rl_select": len(rl_select_ds),
+                  "test": len(gnn_test_ds)},
         "state_dim": state_dim,
         "embed_dim": embed_dim,
         "episodes": args.episodes,

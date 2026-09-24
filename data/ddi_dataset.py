@@ -5,6 +5,7 @@ Wraps the loaded DataFrame into a PyTorch Dataset.
 Includes weighted sampler to handle class imbalance automatically.
 """
 
+import hashlib
 import torch
 import numpy as np
 from torch.utils.data import Dataset, WeightedRandomSampler
@@ -54,6 +55,14 @@ class DDIDataset(Dataset):
     def __getitem__(self, idx):
         s = self.samples[idx]
         return s["graph_a"], s["graph_b"], s["label"], s["meta"]
+
+    def fingerprint(self) -> str:
+        """SHA-256 over every (smiles_a, smiles_b, label) in order."""
+        h = hashlib.sha256()
+        for s in self.samples:
+            m = s["meta"]
+            h.update(f"{m['smiles_a']}|{m['smiles_b']}|{int(s['label'].item())}\n".encode())
+        return h.hexdigest()
 
     def get_labels(self) -> list:
         return [int(s["label"].item()) for s in self.samples]
