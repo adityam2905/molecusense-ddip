@@ -117,7 +117,7 @@ class DDIInference:
         notes = [f"{name} {w}." for w in structure_warnings(smiles)]
         if self.seen_in_training(smiles) is False:
             notes.append(f"{name} was not in the training data. Scores for new drugs are much "
-                         "less reliable (see System Info).")
+                         "less reliable.")
         return notes
 
     @property
