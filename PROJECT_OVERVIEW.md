@@ -1,112 +1,62 @@
-# MolecuSense: Drug-Drug Interaction (DDI) Prediction System
+# MolecuSense: Drug-Drug Interaction (DDI) Screening
 
 ## Abstract
-MolecuSense is a research-focused drug-drug interaction (DDI) prediction system
-that combines a Graph Attention Network (GAT) with an optional reinforcement
-learning (RL) calibration policy. The system converts drug names or SMILES into
-molecular graphs, predicts interaction likelihood, and provides atom-level
-attention visualizations to improve interpretability. A Streamlit application
-supports single-pair and batch screening workflows.
+MolecuSense scores drug pairs for how likely they are to be reported together
+as interacting in FDA adverse event data (TWOSIDES). It converts drug names or
+SMILES into molecular graphs, scores the pair with a Graph Attention Network
+(GAT), reports the result as a percentile against non-interacting pairs, and
+shows atom-level attention maps. A Streamlit app supports single-pair and
+batch screening.
 
-## 1. Problem Context and Motivation
-DDIs contribute to adverse drug events and are difficult to detect using manual
-rules or simple similarity heuristics. A model that learns from molecular
-structure can generalize to unseen combinations and provide probabilistic
-signals for screening. TWOSIDES, a large-scale polypharmacy dataset derived
-from FDA adverse event reports, enables learning interaction patterns at scale.
+The main finding is a limitation. The model mostly scores each drug on its
+own (how often it appears in FDA reports), and once that signal is removed
+from the data, neither the GNN nor simpler baselines beat chance. See the
+README for the full results.
 
-## 2. System Overview
-MolecuSense consists of:
-- A GAT-based GNN for base interaction prediction.
-- A lightweight RL calibration policy that optionally adjusts confidence.
-- A data pipeline that resolves drug names to SMILES and builds molecular
-  graphs with atom and bond features.
-- A Streamlit UI for interactive inference and batch screening.
+## 1. Data
+- **Source:** TWOSIDES, drug pairs with side-effect signals (PRR ≥ 2). Labels
+  reflect statistical association in reports, not verified causation.
+- **Sample:** 9,982 pairs (4,995 interacting, 4,987 not) over 850 drugs.
+- **Non-interacting pairs:** drug pairs never reported together. They're drawn
+  in proportion to each drug's frequency in real pairs, which only partly
+  removes the popularity shortcut.
+- **Cleaning:** pairs are de-duplicated by molecule. Pairs of a molecule with
+  itself, and fake pairs that are really known interactions, are removed.
 
-## 3. Data and Preprocessing
-### 3.1 Dataset
-The system is trained on TWOSIDES, which provides drug pairs and their
-associated side effects from pharmacovigilance reports. Labels are derived from
-statistical signals such as PRR (Proportional Reporting Ratio), and therefore
-represent association rather than clinically verified causation.
+## 2. Model
+- **Encoder:** a three-layer GAT with bond features, run on each molecule.
+- **Pair representation:** `[A + B, |A − B|]`, so drug order doesn't matter.
+- **Classifier:** an MLP that outputs an interaction logit.
 
-### 3.2 SMILES Resolution
-For drug-name inputs, the system attempts to resolve SMILES via PubChem. It
-includes local fallbacks for common drugs and caches resolved SMILES in
-`data/smiles_cache.csv` to reduce repeated queries.
+## 3. Calibration and risk bands
+- **Temperature scaling** is fitted on the validation set (test ECE
+  0.069 → 0.033).
+- **Risk bands** use the percentile of the pair's score among validation pairs
+  not known to interact: HIGH above 95%, MEDIUM above 80%.
+- **Why a percentile:** training uses a 50/50 class mix, so raw probabilities
+  overstate real-world risk.
 
-### 3.3 Graph Construction
-Each molecule is converted to a graph:
-- Nodes represent atoms with feature vectors.
-- Edges represent bonds with typed bond features.
-This representation enables the GNN to learn from molecular topology.
+## 4. Evaluation
+- **Pair split:** random pairs. Test drugs are also seen in training.
+- **Drug split:** whole drugs held out, reported separately for one and for
+  two unseen drugs.
+- **Baselines on the same test pairs:**
+  - drug popularity
+  - drug identity
+  - single-drug fingerprint
+  - pair fingerprint
+- **Pair audit:** the share of the model's output explained by one score per
+  drug.
 
-## 4. Model Architecture
-### 4.1 Base Model (GAT)
-- Encoder: 3-layer Graph Attention Network.
-- Classifier: MLP that consumes concatenated embeddings from drug A and drug B.
-- Output: Base probability of interaction.
+## 5. Experiments that didn't help
+- **RL probability adjustment** (REINFORCE): +0.2% test accuracy (noise).
+  Removed from the app; code kept in `experiments/train_rl.py`.
+- **Exactly balanced non-interacting pairs:** removes the popularity shortcut
+  entirely, but every model then falls to chance. Kept as a diagnostic.
 
-The attention mechanism highlights atoms that most influence the prediction,
-which supports interpretability via heatmaps.
-
-### 4.2 RL Calibration Policy (Optional)
-- Policy network: small MLP trained with REINFORCE.
-- State: GNN embeddings, base probability, and attention statistics.
-- Action: adjustment delta in the range [-0.3, +0.3].
-- Output: Calibrated probability = base probability + delta, clamped to [0, 1].
-
-The calibration policy does not change GNN weights and has minimal inference
-cost. Its purpose is to improve probability calibration when training shows
-measurable gains in metrics (see `checkpoints/rl_meta.json`).
-
-## 5. Inference Workflow
-1. Input drug names or SMILES.
-2. Resolve SMILES (PubChem lookup or fallback cache).
-3. Construct molecular graphs for both drugs.
-4. Run GNN to obtain base probability and attention weights.
-5. Optionally run RL policy to adjust the probability.
-6. Return probability, risk level, and attention visualizations.
-
-## 6. User Interface
-The Streamlit app provides:
-- Single Pair: interactive prediction with attention maps and RL adjustment.
-- Batch Predict: CSV upload with `drug_a`, `drug_b` columns and downloadable
-  results.
-- System Info: model metrics and training curves.
-
-## 7. Benefits of RL Calibration
-Base models are often miscalibrated, meaning predicted probabilities do not
-match real-world correctness rates. The RL calibration policy learns when to
-nudge probabilities up or down based on internal model signals, which can
-improve confidence reliability for threshold-based screening or ranking.
-
-## 8. Limitations
-- TWOSIDES labels are derived statistically and are not clinically verified.
-- Negative ("non-interacting") pairs are inferred by absence from TWOSIDES'
-  reported interacting-pair set, not confirmed to be safe combinations.
-- Train/val/test splits are pair-level: the same drug can appear across
-  splits paired with different partners, so reported metrics likely
-  overstate generalization to entirely unseen drugs (no cold-start split).
-- Risk-level thresholds are unlabeled defaults, not calibrated against a
-  validation study.
-- PubChem resolution can fail for ambiguous or uncommon drug names.
-- RL improvements depend on training size and data quality.
-- The system is intended for research use only and is not a clinical tool.
-
-## 9. Outputs and Artifacts
-- `checkpoints/best_model.pt`: trained GNN weights.
-- `checkpoints/training_meta.json`: training metrics and configuration.
-- `checkpoints/training_curves.png`: GNN training curves.
-- `checkpoints/rl_policy.pt`: RL policy weights (optional).
-- `checkpoints/rl_meta.json`: RL training metrics (optional).
-
-## 10. Conclusion
-MolecuSense delivers a structure-aware DDI prediction pipeline with optional
-probability calibration. The combination of attention-based GNNs and a
-lightweight RL policy provides both predictive capability and improved
-confidence calibration, making the system suitable for research-level screening
-and exploratory analysis.
-
-## Disclaimer
-Research use only. Not a clinical tool.
+## 6. Limitations
+- Scores drugs more than pairs (89% of output explained per drug).
+- Weak on unseen drugs (0.59 AUROC; chance when both drugs are new).
+- Simple fingerprint baselines outperform the GNN.
+- "Non-interacting" means "not reported", not "safe".
+- Research use only; not a clinical tool.

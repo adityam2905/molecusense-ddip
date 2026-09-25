@@ -1,0 +1,91 @@
+{
+  "checkpoint": "checkpoints_drug_split_balanced",
+  "negatives": "balanced",
+  "split": "drug",
+  "split_sizes": [
+    4740,
+    1358,
+    612
+  ],
+  "test_new_drug_counts": [
+    0,
+    595,
+    17
+  ],
+  "gnn": {
+    "test_auroc": 0.49958069475653416,
+    "by_new_drugs": {
+      "1": {
+        "n": 595,
+        "auroc": 0.4923169732289201
+      }
+    }
+  },
+  "gnn_test_metrics": {
+    "loss": 0.7838156301211687,
+    "auroc": 0.49958069475653416,
+    "auprc": 0.4545319137178422,
+    "f1": 0.6293393057110862,
+    "accuracy": 0.4591503267973856
+  },
+  "calibration": {
+    "ece_before": 0.12215983419636495,
+    "ece_after": 0.040850063262422076,
+    "brier_before": 0.2633892927019711,
+    "brier_after": 0.25000003165294654
+  },
+  "temperature": 216997.95845450633,
+  "test_band_rates": {
+    "interacting": {
+      "HIGH": 0.03914590747330961,
+      "MEDIUM": 0.20640569395017794,
+      "LOW": 0.7544483985765125
+    },
+    "non_interacting": {
+      "HIGH": 0.07250755287009064,
+      "MEDIUM": 0.1419939577039275,
+      "LOW": 0.7854984894259819
+    }
+  },
+  "baselines": {
+    "drug_popularity": {
+      "test_auroc": 0.508724774489039,
+      "by_new_drugs": {
+        "1": {
+          "n": 595,
+          "auroc": 0.5132660262247314
+        }
+      }
+    },
+    "drug_identity": {
+      "test_auroc": 0.4255034350775715,
+      "by_new_drugs": {
+        "1": {
+          "n": 595,
+          "auroc": 0.4262372518666909
+        }
+      },
+      "C": 10.0
+    },
+    "fingerprint_single": {
+      "test_auroc": 0.4751911064282719,
+      "by_new_drugs": {
+        "1": {
+          "n": 595,
+          "auroc": 0.47961436896740123
+        }
+      },
+      "C": 10.0
+    },
+    "fingerprint_pair": {
+      "test_auroc": 0.4838890023760631,
+      "by_new_drugs": {
+        "1": {
+          "n": 595,
+          "auroc": 0.49070069204152256
+        }
+      },
+      "C": 10.0
+    }
+  }
+}

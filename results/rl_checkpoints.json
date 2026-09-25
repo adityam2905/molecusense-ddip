@@ -1,0 +1,18 @@
+{
+  "best_select_accuracy": 0.6072144288577155,
+  "select_rl_accuracy": 0.6072144288577155,
+  "select_base_accuracy": 0.6052104208416834,
+  "test_rl_accuracy": 0.6222444889779559,
+  "test_base_accuracy": 0.6202404809619239,
+  "improvement": 0.002004008016032066,
+  "split": {
+    "rl_train": 1497,
+    "rl_select": 499,
+    "test": 998
+  },
+  "state_dim": 523,
+  "embed_dim": 256,
+  "episodes": 30,
+  "lr": 0.0003,
+  "rl_enabled": true
+}

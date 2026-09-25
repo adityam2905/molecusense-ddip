@@ -1,22 +1,21 @@
 """
-train_rl.py  —  Phase 7: Reinforcement Learning Fine-Tuning
-────────────────────────────────────────────────────────────
-Trains an RL confidence calibration agent on top of the frozen GNN model.
-The RL agent learns to adjust the base model's interaction probability
-predictions to improve accuracy.
+experiments/train_rl.py  —  EXPERIMENT: RL probability adjustment
+──────────────────────────────────────────────────────────────────
+Trains a REINFORCE policy that nudges the frozen GNN's probability by up to
+±0.3. In every run so far it has made no measurable difference to test
+accuracy, so it is NOT used by the app; calibration there is done with
+temperature scaling (utils/calibration.py). Kept as a documented experiment.
 
-Requires: a trained GNN checkpoint from train.py
+The policy is trained and selected only on the GNN's validation pairs and
+scored once on the GNN's test pairs (same split as train.py, via data/splits.py).
 
-Usage
+Usage (from the project root)
 ─────
-  # Default (500 episodes)
-  python train_rl.py
+  python -m experiments.train_rl --episodes 30
+  python -m experiments.train_rl --checkpoint_dir checkpoints_drug_split
 
-  # Custom episodes and learning rate
-  python train_rl.py --episodes 1000 --lr 1e-4
-
-  # Use a specific checkpoint directory
-  python train_rl.py --checkpoint_dir checkpoints/ --episodes 500
+Outputs: experiments/output/rl/<checkpoint name>/ (policy + curves, not
+committed) and results/rl_<checkpoint name>.json (summary, committed).
 """
 
 import os
@@ -27,12 +26,14 @@ import time
 
 import torch
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from torch.utils.data import random_split
+from torch.utils.data import Subset, random_split
 
 sys.path.insert(0, ".")
 from data.data_loader import load_dataset, dataset_stats
 from data.ddi_dataset import DDIDataset
+from data.splits import make_split
 from models.gnn_ddi import DDIPredictor
 from models.rl_agent import (
     RLPolicyNetwork, DDIEnvironment, RLTrainer, get_state_dim,
@@ -133,6 +134,9 @@ def train_rl(args):
 
     # ── Load base GNN model ──────────────────────────────────────────────────
     base_model, meta = load_base_model(args.checkpoint_dir, device)
+    tag = os.path.basename(os.path.normpath(args.checkpoint_dir))
+    out_dir = os.path.join("experiments", "output", "rl", tag)
+    os.makedirs(out_dir, exist_ok=True)
     embed_dim = meta.get("args", {}).get("embed", 256)
 
     # ── Load data (must be the exact dataset the GNN was trained on) ─────────
@@ -150,11 +154,11 @@ def train_rl(args):
             )
 
     print(f"\nLoading data (source={args.source})...")
-    df = load_dataset(source=args.source, path=args.data, max_pairs=args.max_pairs)
+    df = load_dataset(source=args.source, path=args.data, max_pairs=args.max_pairs,
+                      negatives=gnn_args.get("negatives", "degree"))
     dataset_stats(df)
 
     ds = DDIDataset(df=df)
-    n = len(ds)
 
     # The split below is only leak-free if this is byte-for-byte the dataset
     # the GNN was trained on — same sizes aren't enough (the pairs themselves
@@ -173,14 +177,13 @@ def train_rl(args):
             "test pairs. Retrain the GNN before training RL."
         )
 
-    # Reproduce train.py's split exactly (same sizes, same order, same seed).
-    n_test = max(1, int(n * gnn_args.get("test_frac", 0.1)))
-    n_val = max(1, int(n * gnn_args.get("val_frac", 0.2)))
-    n_gnn_train = n - n_val - n_test
-    _, gnn_val_ds, gnn_test_ds = random_split(
-        ds, [n_gnn_train, n_val, n_test],
-        generator=torch.Generator().manual_seed(gnn_args.get("seed", 42)),
-    )
+    # Reproduce train.py's split exactly (shared data/splits.py, same settings).
+    split = make_split(pd.DataFrame([s["meta"] for s in ds.samples]),
+                       mode=gnn_args.get("split", "pair"),
+                       val_frac=gnn_args.get("val_frac", 0.2),
+                       test_frac=gnn_args.get("test_frac", 0.1),
+                       seed=gnn_args.get("seed", 42))
+    gnn_val_ds, gnn_test_ds = Subset(ds, split["val"]), Subset(ds, split["test"])
 
     # The RL policy never touches the GNN's training pairs (the GNN is
     # overconfident on those, so calibrating there would be biased) or its
@@ -262,7 +265,7 @@ def train_rl(args):
                 # Save best RL policy
                 torch.save(
                     policy.state_dict(),
-                    os.path.join(args.checkpoint_dir, "rl_policy.pt")
+                    os.path.join(out_dir, "rl_policy.pt")
                 )
                 flag = " ✓"
             else:
@@ -286,7 +289,7 @@ def train_rl(args):
     # ── Final evaluation ─────────────────────────────────────────────────────
     print(f"\n{'─'*50}")
     print("Loading best RL policy...")
-    rl_path = os.path.join(args.checkpoint_dir, "rl_policy.pt")
+    rl_path = os.path.join(out_dir, "rl_policy.pt")
     if os.path.exists(rl_path):
         policy.load_state_dict(torch.load(rl_path, map_location=device))
 
@@ -323,12 +326,14 @@ def train_rl(args):
         "lr": args.lr,
         "rl_enabled": True,
     }
-    with open(os.path.join(args.checkpoint_dir, "rl_meta.json"), "w") as f:
+    os.makedirs("results", exist_ok=True)
+    results_path = os.path.join("results", f"rl_{tag}.json")
+    with open(results_path, "w") as f:
         json.dump(rl_meta, f, indent=2)
-    print(f"RL metadata saved to {args.checkpoint_dir}/rl_meta.json")
+    print(f"RL summary saved to {results_path}")
 
     # ── Save training curves ─────────────────────────────────────────────────
-    _save_rl_plot(history, args.checkpoint_dir)
+    _save_rl_plot(history, out_dir)
 
     return policy
 

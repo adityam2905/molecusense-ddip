@@ -1,0 +1,79 @@
+{
+  "checkpoint": "checkpoints_uniform_negatives",
+  "calibrated": true,
+  "n_drugs": 158,
+  "n_pairs": 12403,
+  "r2_per_drug_logit": 0.9149963045418422,
+  "r2_per_drug_probability": 0.8991398504121806,
+  "band_share": {
+    "HIGH": 0.16181568975247923,
+    "MEDIUM": 0.2175280174151415,
+    "LOW": 0.6206562928323792
+  },
+  "top_drugs_by_proneness": [
+    {
+      "name": "Famotidine",
+      "score": 2.399
+    },
+    {
+      "name": "Metronidazole",
+      "score": 2.27
+    },
+    {
+      "name": "Ranitidine",
+      "score": 2.244
+    },
+    {
+      "name": "Thiamine",
+      "score": 2.077
+    },
+    {
+      "name": "Docusate",
+      "score": 2.007
+    },
+    {
+      "name": "Azathioprine",
+      "score": 1.981
+    },
+    {
+      "name": "Salmeterol",
+      "score": 1.857
+    },
+    {
+      "name": "Folic Acid",
+      "score": 1.849
+    },
+    {
+      "name": "Methotrexate",
+      "score": 1.813
+    },
+    {
+      "name": "Quinapril",
+      "score": 1.782
+    }
+  ],
+  "sanity_pairs": [
+    {
+      "pair": "Aspirin + Ibuprofen",
+      "level": "MEDIUM",
+      "percentile": 94.42231075697211,
+      "probability": 0.8225104013024882
+    },
+    {
+      "pair": "Warfarin + table salt",
+      "level": "MEDIUM",
+      "percentile": 94.32270916334662,
+      "probability": 0.8209757799740096
+    },
+    {
+      "pair": "Metformin + caffeine",
+      "level": "HIGH",
+      "percentile": 98.70517928286853,
+      "probability": 0.8632113896350139
+    },
+    {
+      "pair": "Aspirin + aspirin",
+      "error": "Both inputs are the same molecule. A drug-drug interaction needs two different drugs."
+    }
+  ]
+}

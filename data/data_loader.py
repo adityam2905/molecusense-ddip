@@ -208,11 +208,16 @@ def _add_negatives(df: pd.DataFrame, ratio: float = 1.0) -> pd.DataFrame:
 
 
 def _generate_negative_name_pairs(
-    names: list, exclude_pairs: set, n_neg: int, seed: int = 42
+    names: list, exclude_pairs: set, n_neg: int, seed: int = 42, weights=None
 ) -> pd.DataFrame:
     """
     Sample random (name_a, name_b) pairs from `names`, rejecting any pair
     present in `exclude_pairs` (normalized (min, max) name tuples).
+
+    `weights` (one per name) sets how often each drug is drawn. Passing each
+    drug's count in the positive pairs makes every drug appear about as often
+    in negatives as in positives, so "how often a drug shows up in FDA
+    reports" stops being a shortcut for the label. None draws uniformly.
 
     Unlike `_add_negatives`, this is meant to be called with the FULL known-
     interacting-pair universe as `exclude_pairs`, even when the positive set
@@ -227,13 +232,17 @@ def _generate_negative_name_pairs(
     """
     rng = np.random.default_rng(seed)
     names = list(names)
+    p = None
+    if weights is not None:
+        p = np.asarray(weights, dtype=float)
+        p = p / p.sum()
     negatives = []
     seen = set()
     attempts = 0
     max_attempts = max(n_neg * 20, 1000)
 
     while len(negatives) < n_neg and attempts < max_attempts:
-        a, b = rng.choice(names, size=2, replace=False)
+        a, b = rng.choice(names, size=2, replace=False, p=p)
         key = (a, b) if a <= b else (b, a)
         if key not in exclude_pairs and key not in seen:
             seen.add(key)
@@ -249,6 +258,137 @@ def _generate_negative_name_pairs(
               f"may be densely covered by this drug pool.")
 
     return pd.DataFrame(negatives, columns=["name_a", "name_b", "label", "interaction_type"])
+
+
+def _generate_balanced_negatives(pos_df: pd.DataFrame, exclude_pairs: set,
+                                 seed: int = 42) -> pd.DataFrame:
+    """
+    Non-interacting pairs in which every drug appears EXACTLY as many times as
+    it does in the interacting pairs, so how often a drug shows up carries no
+    information about the label.
+
+    Each drug gets one "stub" per interacting pair it's in. Stubs are shuffled
+    and paired off; pairs that are invalid (same drug, a known interaction, or
+    a repeat) go back into the pool and are reshuffled. Stubs still unpaired
+    after that are placed by swapping partners with an already-accepted pair
+    (x, y) + (u, v) -> (x, u) + (y, v), which keeps every drug's count intact.
+    """
+    rng = np.random.default_rng(seed)
+    stubs = sorted(pos_df["name_a"].tolist() + pos_df["name_b"].tolist())
+    rng.shuffle(stubs)
+
+    def key(a, b):
+        return (a, b) if a <= b else (b, a)
+
+    def ok(a, b, taken):
+        return a != b and key(a, b) not in exclude_pairs and key(a, b) not in taken
+
+    accepted, taken = [], set()
+    pool = stubs
+    for _ in range(200):
+        rng.shuffle(pool)
+        leftover = []
+        for i in range(0, len(pool) - 1, 2):
+            a, b = pool[i], pool[i + 1]
+            if ok(a, b, taken):
+                accepted.append((a, b))
+                taken.add(key(a, b))
+            else:
+                leftover += [a, b]
+        if len(pool) % 2:
+            leftover.append(pool[-1])
+        if len(leftover) >= len(pool) - 1:  # no progress this round
+            pool = leftover
+            break
+        pool = leftover
+        if len(pool) < 2:
+            break
+
+    # Swap step for stubs the random pairing couldn't place.
+    for _ in range(len(pool) * 200):
+        if len(pool) < 2:
+            break
+        x, y = pool[0], pool[1]
+        j = int(rng.integers(len(accepted)))
+        u, v = accepted[j]
+        if rng.random() < 0.5:
+            u, v = v, u
+        taken.discard(key(u, v))
+        if ok(x, u, taken) and ok(y, v, taken | {key(x, u)}):
+            accepted[j] = (x, u)
+            accepted.append((y, v))
+            taken |= {key(x, u), key(y, v)}
+            pool = pool[2:]
+        else:
+            taken.add(key(u, v))
+            rng.shuffle(pool)
+
+    neg_df = pd.DataFrame([{"name_a": a, "name_b": b, "label": 0, "interaction_type": "None"}
+                           for a, b in accepted],
+                          columns=["name_a", "name_b", "label", "interaction_type"])
+    return neg_df, _trim_positives(pos_df, pool, rng)
+
+
+def _trim_positives(pos_df: pd.DataFrame, leftover: list, rng) -> pd.DataFrame:
+    """
+    Stubs left unpaired belong to "hub" drugs reported with nearly every other
+    drug, so there aren't enough non-interacting partners to balance them. Drop
+    that many of their interacting pairs instead, preferring pairs where BOTH
+    drugs have a leftover stub (which balances both at once).
+    """
+    from collections import Counter
+    need = Counter(leftover)
+    if not need:
+        return pos_df
+    order = rng.permutation(len(pos_df))
+    a, b = pos_df["name_a"].to_numpy(), pos_df["name_b"].to_numpy()
+    drop = set()
+    for i in order:  # pass 1: both drugs over-represented
+        if need[a[i]] > 0 and need[b[i]] > 0:
+            drop.add(i); need[a[i]] -= 1; need[b[i]] -= 1
+    for i in order:  # pass 2: at least one drug over-represented
+        if i not in drop and (need[a[i]] > 0 or need[b[i]] > 0):
+            drop.add(i)
+            for d in (a[i], b[i]):
+                need[d] = max(0, need[d] - 1)
+    print(f"  Balanced negatives: dropped {len(drop)} interacting pairs of hub drugs "
+          f"that have too few non-interacting partners")
+    return pos_df.drop(pos_df.index[sorted(drop)])
+
+
+def _dedupe_by_structure(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Different drug names can map to the same molecule (synonyms, salt forms),
+    and the model only ever sees the molecule. Drop:
+      - rows whose SMILES RDKit can't parse
+      - pairs of a molecule with itself
+      - negatives that are structurally identical to a positive pair
+      - repeats of the same molecule pair (would leak across train/test)
+    Row order is otherwise preserved.
+    """
+    from rdkit import Chem, RDLogger
+    RDLogger.DisableLog("rdApp.*")
+
+    canon = {}
+    for s in set(df["smiles_a"]) | set(df["smiles_b"]):
+        mol = Chem.MolFromSmiles(s)
+        canon[s] = Chem.MolToSmiles(mol) if mol is not None else None
+    ca, cb = df["smiles_a"].map(canon), df["smiles_b"].map(canon)
+
+    invalid = ca.isna() | cb.isna()
+    self_pair = ~invalid & (ca == cb)
+    key = pd.Series([tuple(sorted((x, y))) if x and y else None for x, y in zip(ca, cb)],
+                    index=df.index)
+    positive_keys = set(key[(df["label"] == 1) & ~invalid])
+    neg_is_positive = (df["label"] == 0) & key.isin(positive_keys)
+    keep = ~(invalid | self_pair | neg_is_positive)
+    duplicate = key[keep].duplicated(keep="first").reindex(df.index, fill_value=False)
+    keep &= ~duplicate
+
+    print(f"  Structure cleanup: dropped {int(invalid.sum())} invalid SMILES, "
+          f"{int(self_pair.sum())} same-molecule pairs, {int(neg_is_positive.sum())} "
+          f"negatives matching a positive, {int(duplicate.sum())} duplicate pairs")
+    return df[keep].reset_index(drop=True)
 
 
 # ── TWOSIDES loader ────────────────────────────────────────────────────────────
@@ -313,7 +453,37 @@ def _detect_twosides_columns(header: list[str]) -> dict:
     return {"drug_a": drug_a, "drug_b": drug_b, "side_effect": se, "prr": prr}
 
 
-def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0) -> pd.DataFrame:
+DATASET_CACHE_DIR = "data/cache"
+# Bump when the pair-building logic changes, so stale cached datasets are rebuilt.
+DATASET_CACHE_VERSION = 2
+
+
+def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0,
+                  negatives: str = "degree") -> pd.DataFrame:
+    """
+    Build (or load from data/cache/) the TWOSIDES pair dataset.
+
+    Building scans the full ~43M-row file (~5 min), and the result also depends
+    on the current SMILES cache, so the finished pair table is saved once and
+    reused. That keeps repeated runs fast and guarantees they see identical data.
+    """
+    stat = os.stat(path)
+    key = (f"v{DATASET_CACHE_VERSION}_{os.path.basename(path)}_{stat.st_size}_"
+           f"{max_pairs}_{prr_threshold}_{negatives}")
+    cache_file = os.path.join(DATASET_CACHE_DIR, f"twosides_{key}.csv")
+    if os.path.exists(cache_file):
+        print(f"Loading cached TWOSIDES pairs: {cache_file}")
+        return pd.read_csv(cache_file, keep_default_na=False)
+
+    df = _build_twosides(path, max_pairs, prr_threshold, negatives)
+    os.makedirs(DATASET_CACHE_DIR, exist_ok=True)
+    df.to_csv(cache_file, index=False)
+    print(f"  Saved pair table to {cache_file}")
+    return df
+
+
+def _build_twosides(path: str, max_pairs: int, prr_threshold: float,
+                    negatives: str) -> pd.DataFrame:
     """
     Load the TWOSIDES polypharmacy side-effect dataset.
 
@@ -334,8 +504,18 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
     5. Sample max_pairs positive pairs (cache-aware)
     6. Generate equal-size random negative pairs, checked against the FULL
        deduplicated pair universe from step 4 (not just the max_pairs sample),
-       so a negative can never be a real interaction that wasn't sampled
+       so a negative can never be a real interaction that wasn't sampled.
+       negatives="degree" (default) draws drugs in proportion to their
+       positive count. This only partly removes the popularity shortcut:
+       popular drugs' candidates are mostly rejected as known interactions.
+       "balanced" makes every drug appear exactly as often in negatives as in
+       positives (dropping positives of "hub" drugs that lack non-interacting
+       partners); on TWOSIDES it removes almost all learnable signal, so it's
+       kept as a diagnostic. "uniform" draws every drug equally (the original
+       behaviour, which let drug popularity alone predict the label)
     7. Fetch SMILES from PubChem for all unique drug names (cached locally)
+    8. Clean up by molecule: drop invalid SMILES, same-molecule pairs, and
+       duplicate molecule pairs (different names can share one structure)
 
     Parameters
     ----------
@@ -474,10 +654,20 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
     # between Python processes (hash randomization), which silently made the
     # seeded negative sampling produce different pairs on every run.
     pool_names = sorted(set(df["name_a"].tolist() + df["name_b"].tolist()))
-    neg_df = _generate_negative_name_pairs(
-        pool_names, full_pos_pairs, n_neg=len(df), seed=42
-    )
-    print(f"  Generated {len(neg_df):,} negative pairs "
+    if negatives == "balanced":
+        neg_df, df = _generate_balanced_negatives(df, full_pos_pairs, seed=42)
+    elif negatives in ("degree", "uniform"):
+        weights = None
+        if negatives == "degree":
+            counts = pd.concat([df["name_a"], df["name_b"]]).value_counts()
+            weights = [counts[n] for n in pool_names]
+        neg_df = _generate_negative_name_pairs(
+            pool_names, full_pos_pairs, n_neg=len(df), seed=42, weights=weights
+        )
+    else:
+        raise ValueError(f"Unknown negatives mode {negatives!r}; "
+                         "use 'balanced', 'degree' or 'uniform'")
+    print(f"  Generated {len(neg_df):,} {negatives} negative pairs "
           f"(checked against {len(full_pos_pairs):,} known interacting pairs)")
 
     df = pd.concat([df, neg_df], ignore_index=True).sample(frac=1, random_state=42).reset_index(drop=True)
@@ -495,6 +685,7 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
     df = df[(df["smiles_a"] != "") & (df["smiles_b"] != "")]
     print(f"  Pairs with valid SMILES: {len(df):,} (dropped {before - len(df)} — no PubChem entry)")
 
+    df = _dedupe_by_structure(df)
 
     if len(df) == 0:
         raise RuntimeError(
@@ -509,7 +700,8 @@ def load_twosides(path: str, max_pairs: int = 10000, prr_threshold: float = 2.0)
 
 # ── Unified entry point ────────────────────────────────────────────────────────
 
-def load_dataset(source: str = "toy", path: str = None, max_pairs: int = 10000) -> pd.DataFrame:
+def load_dataset(source: str = "toy", path: str = None, max_pairs: int = 10000,
+                 negatives: str = "degree") -> pd.DataFrame:
     """
     Load DDI pairs from the specified source.
 
@@ -550,7 +742,7 @@ def load_dataset(source: str = "toy", path: str = None, max_pairs: int = 10000) 
                 "TWOSIDES data file not found. Place TWOSIDES.csv.gz in data/ "
                 "or specify --data path."
             )
-        return load_twosides(path, max_pairs=max_pairs)
+        return load_twosides(path, max_pairs=max_pairs, negatives=negatives)
 
     if source == "csv":
         df = pd.read_csv(path)

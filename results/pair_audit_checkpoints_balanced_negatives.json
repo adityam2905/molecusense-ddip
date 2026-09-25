@@ -1,0 +1,79 @@
+{
+  "checkpoint": "checkpoints_balanced_negatives",
+  "calibrated": true,
+  "n_drugs": 158,
+  "n_pairs": 12403,
+  "r2_per_drug_logit": 0.9726668357427842,
+  "r2_per_drug_probability": 0.9726668357553522,
+  "band_share": {
+    "HIGH": 0.05200354752882367,
+    "MEDIUM": 0.11972909779891962,
+    "LOW": 0.8282673546722568
+  },
+  "top_drugs_by_proneness": [
+    {
+      "name": "Magnesium Carbonate",
+      "score": 0.017
+    },
+    {
+      "name": "Lanthanum Carbonate",
+      "score": 0.017
+    },
+    {
+      "name": "Lithium Carbonate",
+      "score": 0.017
+    },
+    {
+      "name": "Oxygen",
+      "score": 0.016
+    },
+    {
+      "name": "Zinc Sulfate",
+      "score": 0.016
+    },
+    {
+      "name": "Potassium Iodide",
+      "score": 0.016
+    },
+    {
+      "name": "85 Strontium",
+      "score": 0.015
+    },
+    {
+      "name": "Azathioprine",
+      "score": 0.013
+    },
+    {
+      "name": "Acetazolamide",
+      "score": 0.011
+    },
+    {
+      "name": "Amiloride",
+      "score": 0.011
+    }
+  ],
+  "sanity_pairs": [
+    {
+      "pair": "Aspirin + Ibuprofen",
+      "level": "LOW",
+      "percentile": 65.71428571428571,
+      "probability": 0.5000003431360406
+    },
+    {
+      "pair": "Warfarin + table salt",
+      "level": "HIGH",
+      "percentile": 97.79220779220779,
+      "probability": 0.5000003676066008
+    },
+    {
+      "pair": "Metformin + caffeine",
+      "level": "MEDIUM",
+      "percentile": 91.03896103896103,
+      "probability": 0.5000003603017953
+    },
+    {
+      "pair": "Aspirin + aspirin",
+      "error": "Both inputs are the same molecule. A drug-drug interaction needs two different drugs."
+    }
+  ]
+}

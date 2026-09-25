@@ -16,6 +16,9 @@ Usage
   # TWOSIDES with custom sample size
   python train.py --max_pairs 5000 --epochs 100
 
+  # Hold out whole drugs (tests drugs never seen in training)
+  python train.py --max_pairs 5000 --split drug --save_dir checkpoints_drug_split
+
   # Toy data (instant pipeline verification)
   python train.py --source toy --epochs 50
 
@@ -32,18 +35,20 @@ import time
 import torch
 import torch.nn as nn
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 from sklearn.metrics import (
     roc_auc_score, average_precision_score,
-    f1_score, accuracy_score, classification_report,
+    f1_score, accuracy_score,
 )
-from tqdm import tqdm
 
 sys.path.insert(0, ".")
 from data.data_loader import load_dataset, dataset_stats
 from data.ddi_dataset import DDIDataset, ddi_collate
+from data.splits import make_split
 from models.gnn_ddi import DDIPredictor
+from utils.calibration import fit_temperature, calibration_report, band_rates
 
 
 # ── Args ───────────────────────────────────────────────────────────────────────
@@ -55,6 +60,13 @@ def parse_args():
     p.add_argument("--data",       default=None,   help="Path to data file")
     p.add_argument("--max_pairs",  type=int,   default=10000,
                    help="Max positive drug pairs for TWOSIDES (default 10000)")
+    p.add_argument("--negatives",  default="degree", choices=["balanced", "degree", "uniform"],
+                   help="How non-interacting pairs are built: every drug appears as often "
+                        "as in real pairs (balanced), drugs drawn in proportion to their "
+                        "count (degree), or drawn equally (uniform)")
+    p.add_argument("--split",      default="pair", choices=["pair", "drug"],
+                   help="pair: random pairs (test drugs also seen in training); "
+                        "drug: whole drugs held out of training")
     p.add_argument("--epochs",     type=int,   default=50)
     p.add_argument("--lr",         type=float, default=1e-3)
     p.add_argument("--batch",      type=int,   default=32)
@@ -146,7 +158,8 @@ def train(args):
 
     # Load data
     print(f"\nLoading data (source={args.source})...")
-    df = load_dataset(source=args.source, path=args.data, max_pairs=args.max_pairs)
+    df = load_dataset(source=args.source, path=args.data, max_pairs=args.max_pairs,
+                      negatives=args.negatives)
     dataset_stats(df)
 
     # Multi-class: encode interaction types
@@ -161,18 +174,15 @@ def train(args):
         for t, i in type_to_idx.items():
             print(f"  {i}: {t}")
 
-    # Dataset splits
+    # Dataset splits (built from the dataset's own rows, so indices always line up)
     ds = DDIDataset(df=df)
-    n  = len(ds)
-    n_test  = max(1, int(n * args.test_frac))
-    n_val   = max(1, int(n * args.val_frac))
-    n_train = n - n_val - n_test
-
-    train_ds, val_ds, test_ds = random_split(
-        ds, [n_train, n_val, n_test],
-        generator=torch.Generator().manual_seed(args.seed)
-    )
-    print(f"Split: {n_train} train / {n_val} val / {n_test} test")
+    split = make_split(pd.DataFrame([s["meta"] for s in ds.samples]), mode=args.split,
+                       val_frac=args.val_frac, test_frac=args.test_frac, seed=args.seed)
+    train_ds, val_ds, test_ds = (Subset(ds, split[k]) for k in ("train", "val", "test"))
+    n_train, n_val, n_test = len(train_ds), len(val_ds), len(test_ds)
+    new_drugs = np.bincount(split["test_new_drugs"], minlength=3)
+    print(f"Split ({args.split}): {n_train} train / {n_val} val / {n_test} test"
+          f"  |  test pairs with 0/1/2 unseen drugs: {new_drugs[0]}/{new_drugs[1]}/{new_drugs[2]}")
 
     # DataLoaders
     sampler = None
@@ -316,6 +326,10 @@ def train(args):
     print(f"  {'Test':<6} {ts_loss:>8.4f} {ts_auroc:>8.4f} {ts_auprc:>8.4f} {ts_f1:>8.4f} {ts_acc:>10.4f}")
     print(f"{'─'*62}")
 
+    extra = {}
+    if n_classes == 1:
+        extra = _calibrate_and_report(model, val_loader, test_loader, split, device, args.save_dir)
+
     # ── Save training curves ─────────────────────────────────────────────────
     _save_training_plot(history, args.save_dir)
 
@@ -331,7 +345,9 @@ def train(args):
         "test_auroc":     ts_auroc,
         "test_auprc":     ts_auprc,
         "split_sizes":    [n_train, n_val, n_test],
+        "test_new_drug_counts": new_drugs.tolist(),
         "dataset_fingerprint": ds.fingerprint(),
+        **extra,
         "n_classes":      n_classes,
         "type_to_idx":    type_to_idx,
         "args":           vars(args),
@@ -341,6 +357,56 @@ def train(args):
 
     print(f"\nAll outputs saved to: {args.save_dir}/")
     return model
+
+
+@torch.no_grad()
+def collect_logits(model, loader, device):
+    model.eval()
+    logits, labels = [], []
+    for ba, bb, y, _ in loader:
+        logits.append(model(ba.to(device), bb.to(device)).cpu())
+        labels.append(y)
+    return torch.cat(logits).numpy(), torch.cat(labels).numpy()
+
+
+def _calibrate_and_report(model, val_loader, test_loader, split, device, save_dir) -> dict:
+    """
+    Fit temperature scaling on validation, measure calibration on test, and
+    save the scores of validation pairs NOT known to interact as the reference
+    distribution the app uses for percentiles and risk bands.
+    """
+    val_logits, val_labels = collect_logits(model, val_loader, device)
+    test_logits, test_labels = collect_logits(model, test_loader, device)
+
+    temperature = fit_temperature(val_logits, val_labels)
+    cal = calibration_report(test_logits, test_labels, temperature)
+    reference = np.sort(val_logits[val_labels == 0])
+    bands = band_rates(test_logits, test_labels, reference)
+
+    print(f"\n  Temperature scaling (fit on val): T = {temperature:.3f}")
+    print(f"  Test ECE   : {cal['ece_before']:.4f} -> {cal['ece_after']:.4f}")
+    print(f"  Test Brier : {cal['brier_before']:.4f} -> {cal['brier_after']:.4f}")
+    print(f"  Test pairs flagged HIGH: interacting {bands['interacting']['HIGH']:.1%}, "
+          f"non-interacting {bands['non_interacting']['HIGH']:.1%}")
+
+    # AUROC by how many of the pair's drugs were never seen in training.
+    by_new = {}
+    new = np.asarray(split["test_new_drugs"])
+    for k in (0, 1, 2):
+        mask = new == k
+        if mask.sum() >= 20 and len(set(test_labels[mask])) == 2:
+            by_new[str(k)] = {"n": int(mask.sum()),
+                              "auroc": float(roc_auc_score(test_labels[mask], test_logits[mask]))}
+    if by_new:
+        print("  Test AUROC by unseen drugs in pair: " +
+              ", ".join(f"{k} new: {v['auroc']:.4f} (n={v['n']})" for k, v in by_new.items()))
+
+    with open(os.path.join(save_dir, "calibration.json"), "w") as f:
+        json.dump({"temperature": temperature,
+                   "reference_logits": [round(float(x), 5) for x in reference]}, f)
+
+    return {"temperature": temperature, "calibration": cal,
+            "test_band_rates": bands, "test_auroc_by_new_drugs": by_new}
 
 
 def _save_training_plot(history: dict, save_dir: str):

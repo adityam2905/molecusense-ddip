@@ -58,18 +58,11 @@ def main():
     print(f"           {result['smiles_b'][:55]}")
     print(f"{'─'*56}")
     print(f"  {emoji} Risk level  : {risk['level']}")
-    print(f"  Probability  : {prob:.4f}  ({prob*100:.1f}%)")
+    if result["percentile"] is not None:
+        print(f"  Percentile   : {result['percentile']:.1f}  (vs. pairs not known to interact)")
+    print(f"  Probability  : {prob:.4f}  (assumes half of all pairs interact)")
     print(f"  Assessment   : {risk['description']}")
     print(f"{'─'*56}")
-
-    # RL calibration info
-    rl_info = result.get("rl_info")
-    if rl_info and rl_info.get("rl_active"):
-        print(f"\n  🧠 RL Calibration:")
-        print(f"    Base GNN prob : {rl_info['base_probability']:.4f}")
-        print(f"    RL adjustment : {rl_info['adjustment']:+.4f}")
-        print(f"    Final prob    : {rl_info['final_probability']:.4f}")
-        print(f"{'─'*56}")
 
     if args.show_atoms:
         print("\n  Top attention atoms — Drug A:")

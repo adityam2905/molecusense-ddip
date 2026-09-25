@@ -1,19 +1,12 @@
 """
-DDI-GNN — Drug-Drug Interaction Predictor
-─────────────────────────────────────────────
-Modernized, professional UI for GAT + RL calibration.
+MolecuSense — Drug-Drug Interaction Predictor (Streamlit UI)
 """
 
 import sys
 import os
-import io
 import json
-import subprocess
-import time
-import numpy as np
 import pandas as pd
 import streamlit as st
-from PIL import Image
 
 LIVE_APP_URL = "https://molecusense-ddip.streamlit.app/"
 
@@ -21,9 +14,8 @@ LIVE_APP_URL = "https://molecusense-ddip.streamlit.app/"
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
-from utils.inference import DDIInference, pubchem_smiles
-from utils.visualize import draw_molecule_attention, draw_attention_colorbar
-from data.data_loader import validate_twosides_file, preview_twosides
+from utils.inference import DDIInference
+from utils.visualize import draw_molecule_attention
 
 
 # ── Initialization ─────────────────────────────────────────────────────────────
@@ -66,7 +58,14 @@ def load_model():
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 def has_checkpoint(): return os.path.exists(os.path.join(ROOT, "checkpoints", "best_model.pt"))
-def has_rl(): return os.path.exists(os.path.join(ROOT, "checkpoints", "rl_policy.pt"))
+
+
+def load_result(name):
+    path = os.path.join(ROOT, "results", name)
+    if os.path.exists(path):
+        with open(path) as f:
+            return json.load(f)
+    return None
 
 def hero_section(title, subtitle, badge=None):
     badge_html = f'<div class="hero-badge">{badge}</div>' if badge else ''
@@ -80,68 +79,30 @@ def hero_section(title, subtitle, badge=None):
 
 def risk_badge(result):
     level = result["risk"]["level"]
-    prob, desc = result["probability"], result["risk"]["description"]
+    desc = result["risk"]["description"]
     css = {"HIGH": "risk-high", "MEDIUM": "risk-medium", "LOW": "risk-low"}[level]
     emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}[level]
+    pct = result.get("percentile")
+    headline = (f"Percentile: <b>{pct:.0f}</b> of 100" if pct is not None
+                else f"Probability: <b>{result['probability']:.1%}</b>")
     st.markdown(f"""
     <div class="{css}">
-        <div style="font-size: 1.2rem; margin-bottom: 4px;">{emoji} <b>{level} RISK detected</b></div>
-        <div style="font-size: 1.1rem; margin-bottom: 8px;">Interaction probability: <b>{prob:.1%}</b></div>
+        <div style="font-size: 1.2rem; margin-bottom: 4px;">{emoji} <b>{level} RISK</b></div>
+        <div style="font-size: 1.1rem; margin-bottom: 8px;">{headline}</div>
         <div style="font-weight:400; opacity: 0.9; line-height: 1.4;">{desc}</div>
     </div>
     """, unsafe_allow_html=True)
+    if pct is not None:
+        st.caption(
+            f"Model probability {result['probability']:.1%} (calibrated, but for a population "
+            "where half of all pairs interact, as in training — real-world risk is lower). "
+            "The risk band uses the percentile: HIGH = above 95% of drug pairs not known "
+            "to interact, MEDIUM = above 80%. The score mostly reflects how often each "
+            "drug appears in FDA adverse-event reports, not the specific pair — see System Info."
+        )
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
-def page_setup():
-    hero_section("Pipeline Configuration", "Prepare datasets and train neural structures", "Step 1: Setup")
-    
-    st.markdown("""
-    <div class="step-box">
-        Follow these steps to prepare the <b>TWOSIDES</b> dataset and train your Graph Attention Network (GNN).
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.expander("📂 Step 1 — Dataset Preparation", expanded=not os.path.exists(os.path.join(ROOT, "data", "TWOSIDES.csv.gz"))):
-        st.markdown("""
-        1. Download `3003377s-s6.csv` (~1GB) from [Tatonetti Lab](http://tatonettilab.org/resources/tatonetti-stm.html).
-        2. Place it in the `data/` directory.
-        3. Rename it to `TWOSIDES.csv.gz` (or use the original CSV).
-        """)
-        data_path = st.text_input("Data Path", value="data/TWOSIDES.csv.gz")
-        if st.button("Validate Dataset"):
-            with st.spinner("Validating..."):
-                result = validate_twosides_file(data_path)
-                if result["ok"]:
-                    st.success(
-                        f"Detected format: {result['format']}  |  "
-                        f"~{result['n_rows']:,} rows  |  "
-                        f"columns: {', '.join(result['columns'])}"
-                    )
-                    st.session_state["validated_path"] = data_path
-                else:
-                    st.error(result["error"] or "Could not validate this file.")
-
-    with st.expander("🧠 Step 2 — GNN Training", expanded=has_checkpoint()):
-        st.markdown("### Training Parameters")
-        c1, c2 = st.columns(2)
-        pairs = c1.number_input("Max Pairs", 1000, 100000, 5000)
-        epochs = c2.number_input("Epochs", 1, 500, 50)
-        
-        if st.button("🚀 Start GNN Training", type="primary", use_container_width=True):
-            cmd = [sys.executable, "train.py", "--max_pairs", str(pairs), "--epochs", str(epochs)]
-            st.info(f"Running: {' '.join(cmd)}")
-            subprocess.Popen(cmd, cwd=ROOT)
-            st.warning("Training started in background. Refresh later.")
-
-    if has_checkpoint():
-        with st.expander("🧪 Step 3 — RL Calibration Agent", expanded=not has_rl()):
-            hero_section("RL Fine-Tuning", "Optimize confidence scores using REINFORCE", "Bonus Phase")
-            if st.button("🧠 Train RL Agent", type="primary", use_container_width=True):
-                cmd = [sys.executable, "train_rl.py", "--episodes", "500"]
-                subprocess.Popen(cmd, cwd=ROOT)
-                st.info("RL training initiated.")
-
 def page_single(model, input_method):
     hero_section("MolecuSense", "Predict complex drug-drug interactions", "Step 2: Analysis")
 
@@ -172,11 +133,6 @@ def page_single(model, input_method):
             else:
                 st.markdown('<div class="result-header">Interference Analysis</div>', unsafe_allow_html=True)
                 risk_badge(res)
-                
-                # RL Info
-                rl = res.get("rl_info")
-                if rl and rl.get("rl_active"):
-                    st.markdown(f'<div class="rl-box"><span class="rl-badge">🧠 RL CALIBRATED</span> &nbsp; Prob: <b>{res["probability"]:.1%}</b> (Adj: {rl["adjustment"]:+.3f})</div>', unsafe_allow_html=True)
 
                 # Visualization
                 st.markdown('<div class="result-header">Attention Mapping</div>', unsafe_allow_html=True)
@@ -226,16 +182,18 @@ def page_batch(model):
             results.append({
                 "drug_a": name_a,
                 "drug_b": name_b,
-                "probability": None,
                 "risk": None,
+                "percentile": None,
+                "probability": None,
                 "error": res["error"],
             })
         else:
             results.append({
                 "drug_a": name_a,
                 "drug_b": name_b,
-                "probability": res["probability"],
                 "risk": res["risk"]["level"],
+                "percentile": res["percentile"],
+                "probability": res["probability"],
                 "error": "",
             })
 
@@ -262,11 +220,35 @@ def page_info(model):
         st.warning("No training metadata found.")
         return
 
-    st.markdown('<div class="result-header">GNN Performance</div>', unsafe_allow_html=True)
+    st.markdown('<div class="result-header">GNN Performance (test AUROC)</div>', unsafe_allow_html=True)
+    drug_split = load_result("eval_checkpoints_drug_split.json")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Val AUROC", f"{model.meta.get('best_val_auroc', 0):.4f}")
-    c2.metric("Test AUROC", f"{model.meta.get('test_auroc', 0):.4f}")
-    c3.metric("Test AUPRC", f"{model.meta.get('test_auprc', 0):.4f}")
+    c1.metric("New pairs of known drugs", f"{model.meta.get('test_auroc', 0):.3f}")
+    if drug_split:
+        c2.metric("Drugs never seen in training", f"{drug_split['gnn']['test_auroc']:.3f}")
+    c3.metric("Random guessing", "0.500")
+
+    audit = load_result("pair_audit_checkpoints.json")
+    if audit:
+        st.info(
+            f"**What the score mostly measures.** Across {audit['n_pairs']:,} pairs of "
+            f"{audit['n_drugs']} drugs, one fixed score per drug explains "
+            f"{audit['r2_per_drug_probability']:.0%} of the model's output. The model mainly "
+            "rates how often each drug is reported in FDA adverse-event data, not the "
+            "chemistry of the specific pair. When the training data was rebalanced so drug "
+            "frequency gave nothing away, neither this model nor simple baselines did better "
+            "than chance. Treat results as a screening hint, not an interaction prediction."
+        )
+
+    cal = model.meta.get("calibration")
+    if cal:
+        st.markdown('<div class="result-header">Calibration (test set)</div>', unsafe_allow_html=True)
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Temperature", f"{model.meta['temperature']:.2f}")
+        c2.metric("ECE", f"{cal['ece_after']:.3f}", f"{cal['ece_after'] - cal['ece_before']:+.3f}",
+                  delta_color="inverse")
+        c3.metric("Brier score", f"{cal['brier_after']:.3f}",
+                  f"{cal['brier_after'] - cal['brier_before']:+.3f}", delta_color="inverse")
 
     st.markdown('<div class="result-header">Architecture Specs</div>', unsafe_allow_html=True)
     st.json({
@@ -287,12 +269,10 @@ def main():
     load_css()
     
     st.sidebar.markdown('<h1 style="margin-top:0">⚗️ MolecuSense</h1>', unsafe_allow_html=True)
-    st.sidebar.caption("GAT + REINFORCE Calibration")
+    st.sidebar.caption("Graph attention network · temperature-calibrated")
     st.sidebar.link_button("🔗 Live app", LIVE_APP_URL, use_container_width=True)
-    
-    ckpt, rl = has_checkpoint(), has_rl()
-    if ckpt: st.sidebar.success("GNN Loaded ✓")
-    if rl: st.sidebar.success("RL Loaded ✓")
+
+    if has_checkpoint(): st.sidebar.success("Model loaded ✓")
     
     pages = ["Single Pair", "Batch Predict", "System Info"]
     mode = st.sidebar.selectbox("Navigate", pages, index=0)
