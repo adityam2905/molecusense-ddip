@@ -21,7 +21,7 @@ import torch
 from rdkit import Chem
 from torch_geometric.data import Batch
 
-from utils.mol_graph import smiles_to_graph
+from utils.mol_graph import smiles_to_graph, structure_warnings
 from utils.calibration import percentile, risk_from_percentile
 from utils.drug_lookup import resolve
 from models.gnn_ddi import DDIPredictor
@@ -31,7 +31,9 @@ from models.gnn_ddi import DDIPredictor
 _LEGACY_THRESHOLDS = [(0.70, "HIGH"), (0.50, "MEDIUM"), (0.00, "LOW")]
 
 
-def _not_found(label: str, name: str, suggestions: list) -> str:
+def _not_found(label: str, name: str, suggestions: list, reason: str = None) -> str:
+    if reason:
+        return f"Drug {label} ({name!r}): {reason}"
     msg = f"Could not find drug {label} ({name!r}) in the local list or on PubChem."
     if suggestions:
         msg += " Did you mean: " + ", ".join(suggestions) + "?"
@@ -96,6 +98,28 @@ class DDIInference:
             print(f"[DDIInference] No calibration.json in {checkpoint_dir}; "
                   "falling back to fixed probability thresholds.")
 
+        # Canonical SMILES of every drug in the training split. Scores for other
+        # drugs are much less reliable (test AUROC drops sharply), so predictions
+        # say when a drug is new. None = unknown (older checkpoint).
+        self.training_drugs = None
+        drugs_path = os.path.join(checkpoint_dir, "training_drugs.json")
+        if os.path.exists(drugs_path):
+            with open(drugs_path) as f:
+                self.training_drugs = set(json.load(f))
+
+    def seen_in_training(self, smiles: str) -> bool | None:
+        if self.training_drugs is None:
+            return None
+        return _canonical(smiles) in self.training_drugs
+
+    def reliability_notes(self, name: str, smiles: str) -> list[str]:
+        """Plain-language reasons this drug's part of the score is less trustworthy."""
+        notes = [f"{name} {w}." for w in structure_warnings(smiles)]
+        if self.seen_in_training(smiles) is False:
+            notes.append(f"{name} was not in the training data. Scores for new drugs are much "
+                         "less reliable (see System Info).")
+        return notes
+
     @property
     def calibrated(self) -> bool:
         return self.reference_logits is not None
@@ -127,7 +151,8 @@ class DDIInference:
 
         Returns a dict with: smiles_a, smiles_b, name_a, name_b, probability,
         percentile, risk, attention_a, attention_b, top_atoms_a, top_atoms_b,
-        error (None on success).
+        seen_a / seen_b (drug in the training split; None if unknown), notes
+        (reasons the score is less reliable), error (None on success).
         """
         from utils.visualize import top_k_atoms
 
@@ -135,7 +160,8 @@ class DDIInference:
             if smiles is None and name and fetch_smiles:
                 found = resolve(name)
                 if not found["smiles"]:
-                    return {"error": _not_found(label, name, found["suggestions"])}
+                    return {"error": _not_found(label, name, found["suggestions"],
+                                                found.get("reason"))}
                 if label == "A":
                     smiles_a = found["smiles"]
                 else:
@@ -153,8 +179,15 @@ class DDIInference:
         if g_b is None:
             return {"error": f"Invalid SMILES for drug B: {smiles_b}"}
         if _canonical(smiles_a) == _canonical(smiles_b):
-            return {"error": "Both inputs are the same molecule. A drug-drug "
-                             "interaction needs two different drugs."}
+            msg = ("Both inputs are the same molecule. A drug-drug interaction needs two "
+                   "different drugs.")
+            if name_a and name_b and name_a.strip().lower() != name_b.strip().lower():
+                # Distinct names, same structure: usually stereoisomers, since
+                # PubChem's SMILES and the model's features ignore 3D arrangement.
+                msg += (f" {name_a} and {name_b} have the same structure once stereochemistry "
+                        "(3D arrangement) is ignored, which this model does, so it can't tell "
+                        "them apart.")
+            return {"error": msg}
 
         ba = Batch.from_data_list([g_a]).to(self.device)
         bb = Batch.from_data_list([g_b]).to(self.device)
@@ -176,5 +209,9 @@ class DDIInference:
             "attention_b": attn_b,
             "top_atoms_a": top_k_atoms(smiles_a, attn_a, k=5),
             "top_atoms_b": top_k_atoms(smiles_b, attn_b, k=5),
+            "seen_a":      self.seen_in_training(smiles_a),
+            "seen_b":      self.seen_in_training(smiles_b),
+            "notes":       (self.reliability_notes(name_a or "Drug A", smiles_a)
+                            + self.reliability_notes(name_b or "Drug B", smiles_b)),
             "error":       None,
         }

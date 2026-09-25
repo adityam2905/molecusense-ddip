@@ -138,6 +138,9 @@ def page_single(model, input_method):
             else:
                 st.markdown('<div class="result-header">Model Score</div>', unsafe_allow_html=True)
                 risk_badge(res)
+                if res["notes"]:
+                    st.warning("**Treat this score with extra caution.**\n\n"
+                               + "\n".join(f"- {n}" for n in res["notes"]))
 
                 st.markdown('<div class="result-header">How the Model Reads Each Molecule</div>',
                             unsafe_allow_html=True)
@@ -177,44 +180,17 @@ def page_batch(model):
         df = df.head(MAX_BATCH_ROWS)
 
     st.write(f"Rows to score: {len(df):,}")
-    if not st.button("Run Batch Prediction", type="primary", use_container_width=True):
+    # Results live in session state so they survive reruns (e.g. clicking
+    # Download), keyed by the uploaded file so a new upload starts fresh.
+    key = (uploaded.name, uploaded.size)
+    if st.button("Run Batch Prediction", type="primary", use_container_width=True):
+        st.session_state["batch"] = {"key": key, **_score_batch(model, df)}
+    saved = st.session_state.get("batch")
+    if not saved or saved["key"] != key:
         return
 
-    # Look each distinct name up once (local list first, then PubChem).
-    names = sorted({n.strip() for n in pd.concat([df["drug_a"], df["drug_b"]]) if n.strip()})
-    lookups = {}
-    with st.spinner(f"Looking up {len(names)} distinct drug names..."):
-        for n in names:
-            lookups[n] = resolve(n)
-    sources = pd.Series([r["source"] or "not found" for r in lookups.values()]).value_counts()
-    st.caption("Name lookups: " + ", ".join(f"{v} {k}" for k, v in sources.items()))
-
-    results = []
-    progress = st.progress(0)
-    for i, (a, b) in enumerate(zip(df["drug_a"].str.strip(), df["drug_b"].str.strip())):
-        row = {"drug_a": a, "drug_b": b, "model_score": None, "percentile": None,
-               "probability": None, "error": ""}
-        la, lb = lookups.get(a), lookups.get(b)
-        if not a or not b:
-            row["error"] = "Missing drug name"
-        elif not la["smiles"] or not lb["smiles"]:
-            bad = [(n, l) for n, l in ((a, la), (b, lb)) if not l["smiles"]]
-            row["error"] = "; ".join(
-                f"Unknown drug {n!r}" + (f" (did you mean {', '.join(l['suggestions'])}?)"
-                                         if l["suggestions"] else "")
-                for n, l in bad)
-        else:
-            res = model.predict(smiles_a=la["smiles"], smiles_b=lb["smiles"],
-                                name_a=a, name_b=b, fetch_smiles=False)
-            if res.get("error"):
-                row["error"] = res["error"]
-            else:
-                row.update(model_score=res["risk"]["level"], percentile=round(res["percentile"], 1),
-                           probability=round(res["probability"], 4))
-        results.append(row)
-        progress.progress((i + 1) / len(df))
-
-    out_df = pd.DataFrame(results)
+    st.caption(saved["lookup_summary"])
+    out_df = saved["results"]
     st.dataframe(out_df, use_container_width=True)
 
     csv_bytes = out_df.to_csv(index=False).encode("utf-8")
@@ -225,6 +201,47 @@ def page_batch(model):
         mime="text/csv",
         use_container_width=True,
     )
+
+
+def _score_batch(model, df) -> dict:
+    # Look each distinct name up once (local list first, then PubChem).
+    names = sorted({n.strip() for n in pd.concat([df["drug_a"], df["drug_b"]]) if n.strip()})
+    lookups = {}
+    with st.spinner(f"Looking up {len(names)} distinct drug names..."):
+        for n in names:
+            lookups[n] = resolve(n)
+    sources = pd.Series([r["source"] or "not found" for r in lookups.values()]).value_counts()
+    summary = "Name lookups: " + ", ".join(f"{v} {k}" for k, v in sources.items())
+
+    results = []
+    progress = st.progress(0)
+    for i, (a, b) in enumerate(zip(df["drug_a"].str.strip(), df["drug_b"].str.strip())):
+        row = {"drug_a": a, "drug_b": b, "model_score": None, "percentile": None,
+               "probability": None, "notes": "", "error": ""}
+        la, lb = lookups.get(a), lookups.get(b)
+        if not a or not b:
+            row["error"] = "Missing drug name"
+        elif not la["smiles"] or not lb["smiles"]:
+            bad = [(n, l) for n, l in ((a, la), (b, lb)) if not l["smiles"]]
+            row["error"] = "; ".join(
+                (f"{n!r}: {l['reason']}" if l.get("reason") else f"Unknown drug {n!r}")
+                + (f" (did you mean {', '.join(l['suggestions'])}?)" if l["suggestions"] else "")
+                for n, l in bad)
+        else:
+            res = model.predict(smiles_a=la["smiles"], smiles_b=lb["smiles"],
+                                name_a=a, name_b=b, fetch_smiles=False)
+            if res.get("error"):
+                row["error"] = res["error"]
+            else:
+                pct = res["percentile"]
+                row.update(model_score=res["risk"]["level"],
+                           percentile=round(pct, 1) if pct is not None else None,
+                           probability=round(res["probability"], 4),
+                           notes=" ".join(res["notes"]))
+        results.append(row)
+        progress.progress((i + 1) / len(df))
+
+    return {"results": pd.DataFrame(results), "lookup_summary": summary}
 
 def page_info(model):
     hero_section("Model Intelligence", "Architecture and Training Metrics", "System Data")

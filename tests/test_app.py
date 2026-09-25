@@ -40,6 +40,13 @@ def test_misspelled_name_shows_suggestion(app, no_pubchem):
     assert any("Aspirin" in e.value for e in app.error)
 
 
+def test_unreliable_input_shows_warning(app, no_pubchem):
+    app.text_input(key="nb").set_value("Sodium Chloride").run()
+    [b for b in app.button if "Execute Prediction" in b.label][0].click().run()
+    assert not app.exception, app.exception
+    assert any("inorganic" in w.value for w in app.warning)
+
+
 def test_system_info_page(app):
     app.sidebar.selectbox[0].select("System Info").run()
     assert not app.exception, app.exception

@@ -34,7 +34,9 @@ event reports.
    neighbouring atoms, then the molecule is summarised as one vector.
 4. **Combine the pair.** The two vectors are combined as `[A + B, |A − B|]`,
    so the answer is the same whichever drug you enter first. Entering the
-   same molecule twice is rejected.
+   same molecule twice is rejected. Stereochemistry is ignored, so
+   stereoisomers such as ephedrine and pseudoephedrine count as the same
+   molecule (the app explains this).
 5. **Score it.** The app reports the pair's **percentile**: how its score
    compares with pairs *not* known to interact.
    - **Model score: high** — above 95% of those pairs.
@@ -42,6 +44,9 @@ event reports.
    - **Model score: low** — everything else.
 
    So about 5% of non-interacting pairs score high, by design.
+6. **Say when not to trust it.** A warning appears when a drug wasn't in the
+   training data (accuracy drops sharply for new drugs), is inorganic or tiny
+   (table salt, metal ions), or is a salt or mixture of several parts.
 
 The app also shows a calibrated probability, but only for reference. Training
 used equal numbers of interacting and non-interacting pairs, so that
@@ -229,7 +234,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-36 tests, run on every push by GitHub Actions
+45 tests, run on every push by GitHub Actions
 ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)). They check:
 
 - **Model:** the same score in either drug order; attention varies across
@@ -241,6 +246,9 @@ pytest
 - **Inference:** the deployed checkpoint loads with its calibration and makes a
   prediction; same-molecule and invalid inputs are rejected; names resolve from
   the local list; misspellings get suggestions; wording stays neutral.
+- **Reliability warnings:** unseen drugs, inorganic or tiny molecules, and
+  salts are flagged; non-molecules are refused; stereoisomers get an
+  explanation.
 - **App:** the Streamlit pages render, with no PubChem calls.
 
 ### Retraining (optional)
@@ -271,18 +279,20 @@ pytest
    python -m experiments.train_rl   --checkpoint_dir checkpoints --episodes 30
    ```
 
-`train.py` also fits the temperature and saves the reference scores used for
-percentiles (`checkpoints/calibration.json`).
+`train.py` also fits the temperature, saves the reference scores used for
+percentiles (`checkpoints/calibration.json`), and saves the list of training
+drugs the app uses to flag new ones (`checkpoints/training_drugs.json`).
 
 ---
 
 ## App pages
 
-- **Single Pair:** enter two drugs, see the model score, percentile and a
-  heatmap of how the model reads each molecule.
+- **Single Pair:** enter two drugs, see the model score, percentile, any
+  reliability warnings, and a heatmap of how the model reads each molecule.
 - **Batch Predict:** upload a CSV with `drug_a` and `drug_b` columns (up to
-  200 rows) and download the results. Each distinct name is looked up once,
-  local list first. Unknown names come back with spelling suggestions.
+  200 rows) and download the results, with a `notes` column for the same
+  warnings. Each distinct name is looked up once, local list first. Unknown
+  names come back with spelling suggestions.
 - **System Info:** test AUROC on known and unseen drugs, calibration, and what
   the score mostly measures.
 
@@ -311,7 +321,7 @@ experiments/train_rl.py   RL experiment
 tests/                    pytest suite (model, data, inference, app)
 .github/workflows/ci.yml  Runs the tests on every push
 results/                  JSON summaries behind every number in this README
-checkpoints/              The deployed model, its metrics and calibration
+checkpoints/              The deployed model, its metrics, calibration and training-drug list
 ```
 
 Other `checkpoints_*` folders (the 10k and comparison models) and
@@ -396,6 +406,12 @@ RDKit needs to draw molecules.
 - **"Non-interacting" isn't confirmed:** it only means TWOSIDES has no report
   of the pair.
 - **Still a slice of the data:** 20,000 of the 211,985 known pairs.
+- **Salts aren't cleaned up:** 59 drugs in the local list include
+  counterions or water (e.g. potassium citrate with 3 K⁺), which the model
+  averages in with the drug. The app flags them; stripping them to the parent
+  molecule needs a retrain.
+- **No stereochemistry:** mirror-image and other stereoisomers look identical
+  to the model.
 
 ### What would help next
 
@@ -446,4 +462,15 @@ RDKit needs to draw molecules.
 - The "Validate Dataset" button crashed.
 - The deployed app had no trained model and tried to install the multi-GB GPU
   version of PyTorch.
-- There were no tests. There are now 36, run in CI.
+- Scores for drugs never seen in training looked exactly as confident as the
+  rest. The app now flags them, along with inorganic, tiny and salt inputs.
+- Some name lookups gave the wrong chemical: "Activated Charcoal" became
+  methane (now refused, as it isn't a single molecule) and "Sulfur" became
+  hydrogen sulfide (corrected to S₈).
+- Two different drugs with the same structure apart from stereochemistry were
+  rejected as "the same molecule" with no explanation.
+- Batch results disappeared after clicking Download.
+- Drug names containing "/" broke the PubChem request.
+- Training corrected class imbalance twice (weighted sampler *and*
+  `pos_weight`).
+- There were no tests. There are now 45, run in CI.

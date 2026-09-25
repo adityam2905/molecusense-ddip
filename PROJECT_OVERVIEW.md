@@ -67,7 +67,10 @@ beats chance. See the README for the full results.
 - **Drug lookup:** local list of 1,000+ drugs first, then PubChem, with
   spelling suggestions. Batch mode looks up each distinct name once and is
   capped at 200 rows.
-- **Tests:** 36 pytest tests (order invariance, attention behaviour, split
+- **Reliability warnings:** the app flags drugs not in the training data,
+  inorganic or tiny molecules, and salts or mixtures. It refuses non-molecules
+  (e.g. activated charcoal) and explains stereoisomer clashes.
+- **Tests:** 45 pytest tests (order invariance, attention behaviour, split
   leakage, checkpoint loading, app rendering), run by GitHub Actions on every
   push.
 - **Reproducibility:** cached pair tables, fixed seeds, and a dataset

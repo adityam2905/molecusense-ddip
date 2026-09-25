@@ -182,6 +182,8 @@ def train(args):
                        val_frac=args.val_frac, test_frac=args.test_frac, seed=args.seed)
     train_ds, val_ds, test_ds = (Subset(ds, split[k]) for k in ("train", "val", "test"))
     n_train, n_val, n_test = len(train_ds), len(val_ds), len(test_ds)
+    os.makedirs(args.save_dir, exist_ok=True)
+    save_training_drugs([ds.samples[i]["meta"] for i in split["train"]], args.save_dir)
     new_drugs = np.bincount(split["test_new_drugs"], minlength=3)
     print(f"Split ({args.split}): {n_train} train / {n_val} val / {n_test} test"
           f"  |  test pairs with 0/1/2 unseen drugs: {new_drugs[0]}/{new_drugs[1]}/{new_drugs[2]}")
@@ -236,7 +238,9 @@ def train(args):
         criterion = nn.CrossEntropyLoss(weight=class_weights)
         print(f"class_weights = {[round(w, 3) for w in class_weights.tolist()]}")
     else:
-        pos_w    = ds.pos_weight().to(device)
+        # The weighted sampler already balances the classes; adding pos_weight
+        # on top would correct the imbalance twice. Use one or the other.
+        pos_w    = (torch.tensor(1.0) if sampler is not None else ds.pos_weight()).to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_w)
         print(f"pos_weight = {pos_w.item():.3f}")
 
@@ -368,6 +372,18 @@ def train(args):
 
     print(f"\nAll outputs saved to: {args.save_dir}/")
     return model
+
+
+def save_training_drugs(train_meta: list, save_dir: str):
+    """
+    Canonical SMILES of every drug in the training split, so the app can say
+    when a drug was never seen (scores for those are much less reliable).
+    """
+    from data.splits import _canon
+    drugs = sorted({_canon(m[k]) for m in train_meta for k in ("smiles_a", "smiles_b")})
+    with open(os.path.join(save_dir, "training_drugs.json"), "w") as f:
+        json.dump(drugs, f)
+    return drugs
 
 
 @torch.no_grad()

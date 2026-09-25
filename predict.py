@@ -62,6 +62,8 @@ def main():
         print(f"  Percentile   : {result['percentile']:.1f}  (vs. pairs not known to interact)")
     print(f"  Probability  : {prob:.4f}  (assumes half of all pairs interact)")
     print(f"  Assessment   : {risk['description']}")
+    for note in result["notes"]:
+        print(f"  ⚠ {note}")
     print(f"{'─'*56}")
 
     if args.show_atoms:

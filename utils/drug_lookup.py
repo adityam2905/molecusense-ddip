@@ -24,6 +24,13 @@ CACHE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file
 # International names the cache stores under a different name.
 SYNONYMS = {"paracetamol": "acetaminophen"}
 
+# Names with no single molecular structure. PubChem maps these to something
+# misleading (activated charcoal -> methane, "C"), so refuse them outright.
+NOT_MOLECULES = {
+    "activated charcoal": "Activated charcoal is a carbon material, not a single molecule",
+    "charcoal": "Charcoal is a carbon material, not a single molecule",
+}
+
 _pubchem_hits: dict = {}
 
 
@@ -48,7 +55,7 @@ def pubchem_smiles(name: str, timeout: float = 8.0, retries: int = 2) -> str | N
     if key in _pubchem_hits:
         return _pubchem_hits[key]
     url = (f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
-           f"{requests.utils.quote(name.strip())}/property/CanonicalSMILES/JSON")
+           f"{requests.utils.quote(name.strip(), safe='')}/property/CanonicalSMILES/JSON")
     for attempt in range(retries):
         try:
             resp = requests.get(url, timeout=timeout)
@@ -79,10 +86,14 @@ def suggest(name: str, n: int = 3) -> list[str]:
 def resolve(name: str, use_pubchem: bool = True) -> dict:
     """
     Returns {"smiles": str | None, "source": "cache" | "pubchem" | None,
-             "suggestions": [...] (only when not found)}.
+             "suggestions": [...] (only when not found),
+             "reason": str (only for names that aren't a single molecule)}.
     """
     key = name.strip().lower()
     key = SYNONYMS.get(key, key)
+    if key in NOT_MOLECULES:
+        return {"smiles": None, "source": None, "suggestions": [],
+                "reason": NOT_MOLECULES[key] + ", so the model can't score it."}
     hit = _cache().get(key)
     if hit:
         return {"smiles": hit[1], "source": "cache", "suggestions": []}

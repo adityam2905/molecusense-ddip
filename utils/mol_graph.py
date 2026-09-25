@@ -60,6 +60,32 @@ def bond_features(bond) -> list:
     )  # total: 6
 
 
+MIN_HEAVY_ATOMS = 4
+
+
+def structure_warnings(smiles: str) -> list[str]:
+    """
+    Reasons the model's reading of this structure is not meaningful or is
+    muddied: bare ions and elements, tiny molecules, and salts or mixtures
+    whose extra parts (counterions, water) get averaged in with the drug.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        return []
+    notes = []
+    frags = Chem.GetMolFrags(mol, asMols=True)
+    largest = max(f.GetNumHeavyAtoms() for f in frags)
+    if not any(a.GetSymbol() == "C" for a in mol.GetAtoms()):
+        notes.append("is inorganic (no carbon atoms), so there is little structure for the model to read")
+    elif largest < MIN_HEAVY_ATOMS:
+        notes.append(f"is a very small molecule ({largest} heavy atoms), so there is little "
+                     "structure for the model to read")
+    if len(frags) > 1:
+        notes.append(f"is written as {len(frags)} separate parts (e.g. a salt with its counterions); "
+                     "the model averages over all of them")
+    return notes
+
+
 def smiles_to_graph(smiles: str) -> Data | None:
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
