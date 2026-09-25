@@ -1,24 +1,19 @@
 """
-models/gnn_ddi.py  —  Phase 3: Upgraded GNN with GAT + Edge Features
-──────────────────────────────────────────────────────────────────────
-Improvements over the starter GCN:
-  1. GATConv layers  — attention weights per atom pair (interpretable)
-  2. Edge features   — bond type, conjugation, ring membership fed in
-  3. Residual connections — deeper training stability
-  4. Multi-head attention — 4 heads per layer captures multiple patterns
-  5. Attention extraction — per-atom scores for visualization (Phase 4)
+models/gnn_ddi.py  —  GAT drug-pair model
+──────────────────────────────────────────
+  Drug graph ──► GATConv×3 (bond features, residuals) ──► mean+max pool
+             ──► projection ──► molecule embedding (256)
+  [A + B, |A − B|] ──► MLP(512→512→128→1) ──► interaction logit
 
-Architecture
-────────────
-  Drug graph ──► GATConv×3 ──► global mean+max pool ──► projection ──► embedding
-  [emb_A || emb_B] ──► MLP(256→64→1) ──► interaction probability
+Each molecule is encoded separately, so its per-atom attention scores (used
+for the heatmap) don't depend on the partner drug. The pair combination is
+symmetric, so drug order doesn't change the prediction.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch_geometric.nn import GATConv, global_mean_pool, global_max_pool
-from torch_geometric.utils import softmax as pyg_softmax
 
 
 class MolGAT(nn.Module):
@@ -84,8 +79,6 @@ class MolGAT(nn.Module):
             nn.Dropout(dropout),
         )
 
-        # Store attention weights for the last forward pass (Phase 4)
-        self._last_attention: dict | None = None
 
     def forward(self, x, edge_index, edge_attr, batch, return_attention=False):
         """
@@ -105,14 +98,12 @@ class MolGAT(nn.Module):
         x = F.dropout(x, p=self.dropout, training=self.training)
 
         # Layer 1
-        h1, (ei1, aw1) = self.gat1(x, edge_index, edge_attr=edge_attr,
-                                    return_attention_weights=True)
+        h1 = self.gat1(x, edge_index, edge_attr=edge_attr)
         h1 = self.bn1(F.elu(h1))
         h1 = h1 + F.pad(x, (0, h1.shape[1] - x.shape[1]))  # residual (pad if needed)
 
         # Layer 2
-        h2, (ei2, aw2) = self.gat2(h1, edge_index, edge_attr=edge_attr,
-                                    return_attention_weights=True)
+        h2 = self.gat2(h1, edge_index, edge_attr=edge_attr)
         h2 = self.bn2(F.elu(h2))
         h2 = h2 + h1  # residual
 
@@ -145,7 +136,6 @@ class MolGAT(nn.Module):
             counts = torch.zeros(n_atoms, device=x.device)
             counts.scatter_add_(0, sources, torch.ones_like(aw3.squeeze(-1)))
             atom_scores = atom_scores / (counts + 1e-8)
-            self._last_attention = {"scores": atom_scores, "edge_index": ei3}
             return emb, atom_scores
 
         return emb

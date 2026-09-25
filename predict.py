@@ -57,7 +57,7 @@ def main():
     print(f"  Drug B : {result['name_b']}")
     print(f"           {result['smiles_b'][:55]}")
     print(f"{'─'*56}")
-    print(f"  {emoji} Risk level  : {risk['level']}")
+    print(f"  {emoji} Model score : {risk['level'].title()}")
     if result["percentile"] is not None:
         print(f"  Percentile   : {result['percentile']:.1f}  (vs. pairs not known to interact)")
     print(f"  Probability  : {prob:.4f}  (assumes half of all pairs interact)")
@@ -65,11 +65,13 @@ def main():
     print(f"{'─'*56}")
 
     if args.show_atoms:
-        print("\n  Top attention atoms — Drug A:")
+        print("\n  Top attention atoms (each molecule is read on its own, so these are")
+        print("  the same whatever the partner drug)")
+        print("  Drug A:")
         for a in result["top_atoms_a"][:3]:
             print(f"    Atom {a['index']} ({a['symbol']})  score={a['attention']:.3f}"
                   f"  aromatic={a['is_aromatic']}")
-        print("\n  Top attention atoms — Drug B:")
+        print("  Drug B:")
         for a in result["top_atoms_b"][:3]:
             print(f"    Atom {a['index']} ({a['symbol']})  score={a['attention']:.3f}"
                   f"  aromatic={a['is_aromatic']}")

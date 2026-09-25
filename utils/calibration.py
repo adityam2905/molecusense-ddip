@@ -22,10 +22,11 @@ import torch.nn.functional as F
 HIGH_PERCENTILE = 95.0
 MEDIUM_PERCENTILE = 80.0
 
+# Neutral wording on purpose: this is a research model's score, not advice.
 RISK_TEXT = {
-    "HIGH":   "Scores higher than {pct:.0f}% of drug pairs not known to interact — review before co-administering",
-    "MEDIUM": "Scores higher than {pct:.0f}% of drug pairs not known to interact — use caution",
-    "LOW":    "Scores like drug pairs not known to interact ({pct:.0f}th percentile)",
+    "HIGH":   "Model score: high. Scores above {pct:.0f}% of drug pairs not known to interact.",
+    "MEDIUM": "Model score: medium. Scores above {pct:.0f}% of drug pairs not known to interact.",
+    "LOW":    "Model score: low. In the range of drug pairs not known to interact (percentile {pct:.0f}).",
 }
 
 
@@ -74,9 +75,14 @@ def calibration_report(logits: np.ndarray, labels: np.ndarray, temperature: floa
 
 
 def percentile(logit: float, reference_logits: np.ndarray) -> float:
-    """Share (0–100) of reference (non-interacting) pairs scoring below `logit`."""
+    """
+    Share (0–100) of reference (non-interacting) pairs scoring below `logit`,
+    rounded DOWN to one decimal so a displayed "95" can never sit in a lower
+    band than 95 (94.97 would otherwise print as 95 but band as MEDIUM).
+    """
     ref = np.asarray(reference_logits, float)
-    return float(100.0 * np.searchsorted(np.sort(ref), logit, side="left") / len(ref))
+    raw = 100.0 * np.searchsorted(np.sort(ref), logit, side="left") / len(ref)
+    return float(np.floor(raw * 10) / 10)
 
 
 def risk_from_percentile(pct: float) -> dict:
@@ -86,7 +92,8 @@ def risk_from_percentile(pct: float) -> dict:
         level = "MEDIUM"
     else:
         level = "LOW"
-    return {"level": level, "description": RISK_TEXT[level].format(pct=pct), "percentile": pct}
+    # int() rounds down, keeping the text consistent with the band thresholds.
+    return {"level": level, "description": RISK_TEXT[level].format(pct=int(pct)), "percentile": pct}
 
 
 def band_rates(logits: np.ndarray, labels: np.ndarray, reference_logits: np.ndarray) -> dict:
@@ -98,5 +105,6 @@ def band_rates(logits: np.ndarray, labels: np.ndarray, reference_logits: np.ndar
     labels = np.asarray(labels)
     out = {}
     for name, mask in (("interacting", labels == 1), ("non_interacting", labels == 0)):
-        out[name] = {lvl: float((levels[mask] == lvl).mean()) for lvl in ("HIGH", "MEDIUM", "LOW")}
+        if mask.any():
+            out[name] = {lvl: float((levels[mask] == lvl).mean()) for lvl in ("HIGH", "MEDIUM", "LOW")}
     return out

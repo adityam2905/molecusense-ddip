@@ -14,10 +14,10 @@ Usage
   python train.py --epochs 50
 
   # TWOSIDES with custom sample size
-  python train.py --max_pairs 5000 --epochs 100
+  python train.py --max_pairs 20000 --epochs 50
 
   # Hold out whole drugs (tests drugs never seen in training)
-  python train.py --max_pairs 5000 --split drug --save_dir checkpoints_drug_split
+  python train.py --max_pairs 20000 --split drug --save_dir checkpoints_drug_split
 
   # Toy data (instant pipeline verification)
   python train.py --source toy --epochs 50
@@ -58,8 +58,8 @@ def parse_args():
     p.add_argument("--source",     default="twosides",
                    choices=["toy", "drugbank", "twosides", "csv"])
     p.add_argument("--data",       default=None,   help="Path to data file")
-    p.add_argument("--max_pairs",  type=int,   default=10000,
-                   help="Max positive drug pairs for TWOSIDES (default 10000)")
+    p.add_argument("--max_pairs",  type=int,   default=20000,
+                   help="Max positive drug pairs for TWOSIDES (default 20000)")
     p.add_argument("--negatives",  default="degree", choices=["balanced", "degree", "uniform"],
                    help="How non-interacting pairs are built: every drug appears as often "
                         "as in real pairs (balanced), drugs drawn in proportion to their "
@@ -77,8 +77,10 @@ def parse_args():
     p.add_argument("--val_frac",   type=float, default=0.2)
     p.add_argument("--test_frac",  type=float, default=0.1)
     p.add_argument("--seed",       type=int,   default=42)
-    p.add_argument("--patience",   type=int,   default=10,
+    p.add_argument("--patience",   type=int,   default=8,
                    help="Early stopping patience (epochs)")
+    p.add_argument("--min_delta",  type=float, default=0.002,
+                   help="Smallest gain in validation AUROC that counts as an improvement")
     p.add_argument("--multiclass", action="store_true",
                    help="Classify interaction type (Phase 5)")
     p.add_argument("--save_dir",   default="checkpoints")
@@ -247,6 +249,7 @@ def train(args):
     os.makedirs(args.save_dir, exist_ok=True)
     best_auroc   = 0.0
     best_score   = -1.0  # metric actually used to pick the checkpoint (see below)
+    best_epoch   = 0
     patience_cnt = 0
     history      = {"train_loss": [], "val_loss": [], "val_auroc": [], "val_auprc": [], "val_f1": []}
 
@@ -277,9 +280,14 @@ def train(args):
         # gets saved instead of leaving best_model.pt missing at the end.
         score = vl_auroc if not np.isnan(vl_auroc) else vl_f1
 
+        # Only a real improvement (> min_delta) counts. Otherwise tiny creeps in
+        # val AUROC while the cosine schedule anneals the LR towards zero keep
+        # resetting patience, so training always runs to the last epoch and the
+        # "best" checkpoint is just the final one.
         flag = ""
-        if score > best_score:
+        if score > best_score + args.min_delta:
             best_score = score
+            best_epoch = epoch
             if not np.isnan(vl_auroc):
                 best_auroc = vl_auroc
             patience_cnt = 0
@@ -336,6 +344,9 @@ def train(args):
     # ── Save metadata ────────────────────────────────────────────────────────
     meta = {
         "best_val_auroc": best_auroc,
+        "best_epoch":     best_epoch,
+        "epochs_run":     len(history["train_loss"]),
+        "history":        {k: [round(float(x), 5) for x in v] for k, v in history.items()},
         "train_metrics": {"loss": tr_loss_f, "auroc": tr_auroc_f, "auprc": tr_auprc_f,
                            "f1": tr_f1_f, "accuracy": tr_acc_f},
         "val_metrics":   {"loss": vl_loss_f, "auroc": vl_auroc_f, "auprc": vl_auprc_f,
@@ -386,8 +397,8 @@ def _calibrate_and_report(model, val_loader, test_loader, split, device, save_di
     print(f"\n  Temperature scaling (fit on val): T = {temperature:.3f}")
     print(f"  Test ECE   : {cal['ece_before']:.4f} -> {cal['ece_after']:.4f}")
     print(f"  Test Brier : {cal['brier_before']:.4f} -> {cal['brier_after']:.4f}")
-    print(f"  Test pairs flagged HIGH: interacting {bands['interacting']['HIGH']:.1%}, "
-          f"non-interacting {bands['non_interacting']['HIGH']:.1%}")
+    print("  Test pairs flagged HIGH: " + ", ".join(
+        f"{k.replace('_', '-')} {v['HIGH']:.1%}" for k, v in bands.items()))
 
     # AUROC by how many of the pair's drugs were never seen in training.
     by_new = {}
@@ -420,10 +431,15 @@ def _save_training_plot(history: dict, save_dir: str):
     axes[1].set_title("Validation AUROC"); axes[1].set_xlabel("Epoch")
     axes[1].set_ylim(0, 1)
 
-    axes[2].plot(history["val_auprc"], color="tab:green", linewidth=2)
+    axes[2].plot(history["val_auprc"], color="tab:green", linewidth=2, label="AUPRC")
     axes[2].plot(history["val_f1"],    color="tab:red",   linewidth=2, label="F1")
     axes[2].set_title("Val AUPRC & F1"); axes[2].legend(); axes[2].set_xlabel("Epoch")
     axes[2].set_ylim(0, 1)
+
+    # Mark the epoch whose weights were kept (highest validation AUROC)
+    best = int(np.nanargmax(history["val_auroc"]))
+    for ax in axes:
+        ax.axvline(best, color="grey", linestyle="--", linewidth=1)
 
     plt.tight_layout()
     plt.savefig(f"{save_dir}/training_curves.png", dpi=120, bbox_inches="tight")

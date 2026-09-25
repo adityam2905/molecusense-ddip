@@ -9,12 +9,14 @@ import pandas as pd
 import streamlit as st
 
 LIVE_APP_URL = "https://molecusense-ddip.streamlit.app/"
+MAX_BATCH_ROWS = 200  # each unknown name can cost a PubChem request
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, ROOT)
 
 from utils.inference import DDIInference
+from utils.drug_lookup import resolve, cached_names
 from utils.visualize import draw_molecule_attention
 
 
@@ -83,28 +85,31 @@ def risk_badge(result):
     css = {"HIGH": "risk-high", "MEDIUM": "risk-medium", "LOW": "risk-low"}[level]
     emoji = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}[level]
     pct = result.get("percentile")
-    headline = (f"Percentile: <b>{pct:.0f}</b> of 100" if pct is not None
+    headline = (f"Percentile: <b>{int(pct)}</b> of 100" if pct is not None
                 else f"Probability: <b>{result['probability']:.1%}</b>")
     st.markdown(f"""
     <div class="{css}">
-        <div style="font-size: 1.2rem; margin-bottom: 4px;">{emoji} <b>{level} RISK</b></div>
+        <div style="font-size: 1.2rem; margin-bottom: 4px;">{emoji} <b>Model score: {level.title()}</b></div>
         <div style="font-size: 1.1rem; margin-bottom: 8px;">{headline}</div>
         <div style="font-weight:400; opacity: 0.9; line-height: 1.4;">{desc}</div>
     </div>
     """, unsafe_allow_html=True)
     if pct is not None:
         st.caption(
-            f"Model probability {result['probability']:.1%} (calibrated, but for a population "
-            "where half of all pairs interact, as in training — real-world risk is lower). "
-            "The risk band uses the percentile: HIGH = above 95% of drug pairs not known "
-            "to interact, MEDIUM = above 80%. The score mostly reflects how often each "
-            "drug appears in FDA adverse-event reports, not the specific pair — see System Info."
+            f"Model probability {result['probability']:.1%} (calibrated for a population where "
+            "half of all pairs interact, as in training, so it overstates how often real drug "
+            "pairs interact). Bands use the percentile: high = above 95% of drug pairs not known "
+            "to interact, medium = above 80%. The score mostly reflects how often each drug "
+            "appears in FDA adverse-event reports, not the specific pair (see System Info)."
         )
 
 
 # ── Pages ──────────────────────────────────────────────────────────────────────
 def page_single(model, input_method):
-    hero_section("MolecuSense", "Predict complex drug-drug interactions", "Step 2: Analysis")
+    hero_section("MolecuSense", "Research model scores for drug pairs", "Single pair")
+    if input_method.startswith("Drug name"):
+        st.caption(f"{len(cached_names()):,} drug names are available offline; "
+                   "others are looked up on PubChem.")
 
     st.markdown('<div class="result-header">Molecular Inputs</div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
@@ -131,11 +136,16 @@ def page_single(model, input_method):
             if res.get("error"):
                 st.error(res["error"])
             else:
-                st.markdown('<div class="result-header">Interference Analysis</div>', unsafe_allow_html=True)
+                st.markdown('<div class="result-header">Model Score</div>', unsafe_allow_html=True)
                 risk_badge(res)
 
-                # Visualization
-                st.markdown('<div class="result-header">Attention Mapping</div>', unsafe_allow_html=True)
+                st.markdown('<div class="result-header">How the Model Reads Each Molecule</div>',
+                            unsafe_allow_html=True)
+                st.caption(
+                    "Atoms coloured by the model's attention. Each molecule is encoded on its own, "
+                    "so a drug's map is the same whatever it's paired with: it shows what the "
+                    "model picks out in that molecule, not why this pair got its score."
+                )
                 try:
                     img_a = draw_molecule_attention(res["smiles_a"], res["attention_a"])
                     img_b = draw_molecule_attention(res["smiles_b"], res["attention_b"])
@@ -145,15 +155,15 @@ def page_single(model, input_method):
                 except Exception as e: st.warning(f"Image error: {e}")
 
 def page_batch(model):
-    hero_section("Throughput Screening", "Bulk analysis of chemical pairs", "Step 3: Batch")
-    st.markdown("Upload a CSV with columns: `drug_a`, `drug_b`.")
+    hero_section("Batch Scoring", "Score many drug pairs at once", "Batch")
+    st.markdown(f"Upload a CSV with columns `drug_a` and `drug_b` (up to {MAX_BATCH_ROWS} rows).")
     uploaded = st.file_uploader("CSV file", type=["csv"])
 
     if not uploaded:
         return
 
     try:
-        df = pd.read_csv(uploaded)
+        df = pd.read_csv(uploaded, dtype=str, keep_default_na=False)
     except Exception as e:
         st.error(f"Could not read CSV: {e}")
         return
@@ -162,44 +172,47 @@ def page_batch(model):
     if missing:
         st.error(f"Missing required columns: {', '.join(missing)}")
         return
+    if len(df) > MAX_BATCH_ROWS:
+        st.warning(f"The file has {len(df):,} rows; only the first {MAX_BATCH_ROWS} are scored.")
+        df = df.head(MAX_BATCH_ROWS)
 
-    st.write(f"Rows loaded: {len(df):,}")
-    run = st.button("Run Batch Prediction", type="primary", use_container_width=True)
-
-    if not run:
+    st.write(f"Rows to score: {len(df):,}")
+    if not st.button("Run Batch Prediction", type="primary", use_container_width=True):
         return
+
+    # Look each distinct name up once (local list first, then PubChem).
+    names = sorted({n.strip() for n in pd.concat([df["drug_a"], df["drug_b"]]) if n.strip()})
+    lookups = {}
+    with st.spinner(f"Looking up {len(names)} distinct drug names..."):
+        for n in names:
+            lookups[n] = resolve(n)
+    sources = pd.Series([r["source"] or "not found" for r in lookups.values()]).value_counts()
+    st.caption("Name lookups: " + ", ".join(f"{v} {k}" for k, v in sources.items()))
 
     results = []
     progress = st.progress(0)
-    status = st.empty()
-
-    for i, row in df.iterrows():
-        name_a = str(row.get("drug_a", "")).strip()
-        name_b = str(row.get("drug_b", "")).strip()
-        res = model.predict(name_a=name_a, name_b=name_b, fetch_smiles=True)
-
-        if res.get("error"):
-            results.append({
-                "drug_a": name_a,
-                "drug_b": name_b,
-                "risk": None,
-                "percentile": None,
-                "probability": None,
-                "error": res["error"],
-            })
+    for i, (a, b) in enumerate(zip(df["drug_a"].str.strip(), df["drug_b"].str.strip())):
+        row = {"drug_a": a, "drug_b": b, "model_score": None, "percentile": None,
+               "probability": None, "error": ""}
+        la, lb = lookups.get(a), lookups.get(b)
+        if not a or not b:
+            row["error"] = "Missing drug name"
+        elif not la["smiles"] or not lb["smiles"]:
+            bad = [(n, l) for n, l in ((a, la), (b, lb)) if not l["smiles"]]
+            row["error"] = "; ".join(
+                f"Unknown drug {n!r}" + (f" (did you mean {', '.join(l['suggestions'])}?)"
+                                         if l["suggestions"] else "")
+                for n, l in bad)
         else:
-            results.append({
-                "drug_a": name_a,
-                "drug_b": name_b,
-                "risk": res["risk"]["level"],
-                "percentile": res["percentile"],
-                "probability": res["probability"],
-                "error": "",
-            })
-
-        if (i + 1) % 5 == 0 or i + 1 == len(df):
-            progress.progress((i + 1) / len(df))
-            status.write(f"Processed {i + 1} / {len(df)}")
+            res = model.predict(smiles_a=la["smiles"], smiles_b=lb["smiles"],
+                                name_a=a, name_b=b, fetch_smiles=False)
+            if res.get("error"):
+                row["error"] = res["error"]
+            else:
+                row.update(model_score=res["risk"]["level"], percentile=round(res["percentile"], 1),
+                           probability=round(res["probability"], 4))
+        results.append(row)
+        progress.progress((i + 1) / len(df))
 
     out_df = pd.DataFrame(results)
     st.dataframe(out_df, use_container_width=True)
@@ -235,9 +248,10 @@ def page_info(model):
             f"{audit['n_drugs']} drugs, one fixed score per drug explains "
             f"{audit['r2_per_drug_probability']:.0%} of the model's output. The model mainly "
             "rates how often each drug is reported in FDA adverse-event data, not the "
-            "chemistry of the specific pair. When the training data was rebalanced so drug "
-            "frequency gave nothing away, neither this model nor simple baselines did better "
-            "than chance. Treat results as a screening hint, not an interaction prediction."
+            "chemistry of the specific pair, and simple baselines that score each drug on "
+            "its own do as well or better. When the training data was rebalanced so drug "
+            "frequency gave nothing away, neither this model nor the baselines did better "
+            "than chance. Treat results as a research score, not an interaction prediction."
         )
 
     cal = model.meta.get("calibration")
@@ -279,7 +293,7 @@ def main():
     
     input_method = "Drug name"
     if mode == "Single Pair":
-        input_method = st.sidebar.radio("Method", ["Drug name (PubChem)", "SMILES string"])
+        input_method = st.sidebar.radio("Method", ["Drug name", "SMILES string"])
         
     st.sidebar.markdown("---")
     st.sidebar.markdown('<div class="disclaimer">RESEARCH ONLY — NOT CLINICAL</div>', unsafe_allow_html=True)

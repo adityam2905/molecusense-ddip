@@ -1,0 +1,111 @@
+{
+  "checkpoint": "checkpoints_5k_drug_split",
+  "negatives": "degree",
+  "split": "drug",
+  "split_sizes": [
+    6949,
+    2016,
+    891
+  ],
+  "test_new_drug_counts": [
+    0,
+    858,
+    33
+  ],
+  "gnn": {
+    "test_auroc": 0.5885055103512206,
+    "by_new_drugs": {
+      "1": {
+        "n": 858,
+        "auroc": 0.5920464824608622
+      },
+      "2": {
+        "n": 33,
+        "auroc": 0.49615384615384617
+      }
+    }
+  },
+  "gnn_test_metrics": {
+    "loss": 0.7153038039351954,
+    "auroc": 0.5885055103512206,
+    "auprc": 0.6626567503296468,
+    "f1": 0.5723612622415669,
+    "accuracy": 0.5589225589225589
+  },
+  "calibration": {
+    "ece_before": 0.12455571505557807,
+    "ece_after": 0.08353687787698175,
+    "brier_before": 0.259071722196504,
+    "brier_after": 0.2457966085858337
+  },
+  "temperature": 2.2325596399987844,
+  "test_band_rates": {
+    "interacting": {
+      "HIGH": 0.0821917808219178,
+      "MEDIUM": 0.18590998043052837,
+      "LOW": 0.7318982387475538
+    },
+    "non_interacting": {
+      "HIGH": 0.02368421052631579,
+      "MEDIUM": 0.15263157894736842,
+      "LOW": 0.8236842105263158
+    }
+  },
+  "baselines": {
+    "drug_popularity": {
+      "test_auroc": 0.6031388402513131,
+      "by_new_drugs": {
+        "1": {
+          "n": 858,
+          "auroc": 0.6140141067831318
+        },
+        "2": {
+          "n": 33,
+          "auroc": 0.5
+        }
+      }
+    },
+    "drug_identity": {
+      "test_auroc": 0.6402513132145432,
+      "by_new_drugs": {
+        "1": {
+          "n": 858,
+          "auroc": 0.6444890869437339
+        },
+        "2": {
+          "n": 33,
+          "auroc": 0.5
+        }
+      },
+      "C": 10.0
+    },
+    "fingerprint_single": {
+      "test_auroc": 0.682207230404779,
+      "by_new_drugs": {
+        "1": {
+          "n": 858,
+          "auroc": 0.6846895342319794
+        },
+        "2": {
+          "n": 33,
+          "auroc": 0.6153846153846154
+        }
+      },
+      "C": 0.01
+    },
+    "fingerprint_pair": {
+      "test_auroc": 0.6839942321557319,
+      "by_new_drugs": {
+        "1": {
+          "n": 858,
+          "auroc": 0.6849947557395517
+        },
+        "2": {
+          "n": 33,
+          "auroc": 0.65
+        }
+      },
+      "C": 0.01
+    }
+  }
+}

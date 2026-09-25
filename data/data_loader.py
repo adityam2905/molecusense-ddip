@@ -24,10 +24,11 @@ Usage
 
 import os
 import time
-import requests
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
+
+from utils.drug_lookup import pubchem_smiles
 
 
 # ── Toy dataset ────────────────────────────────────────────────────────────────
@@ -74,28 +75,7 @@ TOY_PAIRS = [
 ]
 
 
-# ── PubChem SMILES lookup ──────────────────────────────────────────────────────
-
-def pubchem_smiles(drug_name: str, retries: int = 1) -> str | None:
-    """Fetch canonical SMILES for a drug name from PubChem REST API."""
-    url = (f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
-           f"{requests.utils.quote(drug_name)}/property/CanonicalSMILES/JSON")
-    for attempt in range(retries):
-        try:
-            resp = requests.get(url, timeout=1.5)
-
-            if resp.status_code == 200:
-                data = resp.json()
-                props = data.get("PropertyTable", {}).get("Properties", [{}])[0]
-                # PubChem may return ConnectivitySMILES even when CanonicalSMILES is requested.
-                return props.get("CanonicalSMILES") or props.get("ConnectivitySMILES") or props.get("IsomericSMILES")
-            elif resp.status_code == 404:
-                return None
-            time.sleep(0.5)
-        except Exception:
-            time.sleep(0.5 * (attempt + 1))
-    return None
-
+# ── PubChem SMILES lookup (shared with the app via utils/drug_lookup.py) ───────
 
 
 def batch_smiles_lookup(names: list[str], cache_path: str = "data/smiles_cache.csv") -> dict:
@@ -314,7 +294,9 @@ def _generate_balanced_negatives(pos_df: pd.DataFrame, exclude_pairs: set,
         if rng.random() < 0.5:
             u, v = v, u
         taken.discard(key(u, v))
-        if ok(x, u, taken) and ok(y, v, taken | {key(x, u)}):
+        # (no `taken | {...}` here: copying the set every attempt made this
+        # step quadratic and took hours at 20k pairs)
+        if ok(x, u, taken) and ok(y, v, taken) and key(x, u) != key(y, v):
             accepted[j] = (x, u)
             accepted.append((y, v))
             taken |= {key(x, u), key(y, v)}
@@ -628,12 +610,6 @@ def _build_twosides(path: str, max_pairs: int, prr_threshold: float,
         except Exception as e:
             print(f"  [warn] Could not read SMILES cache at {cache_path}: {e}")
 
-    def cache_score(row):
-        score = 0
-        if row["name_a"] in cached_names: score += 1
-        if row["name_b"] in cached_names: score += 1
-        return score
-
     if len(df) > max_pairs:
         # Sample candidates, then pick those with best cache coverage
         candidates = df.sample(n=min(len(df), max_pairs * 5), random_state=42).copy()
@@ -774,65 +750,6 @@ def dataset_stats(df: pd.DataFrame):
     print(f"  Pos/neg ratio : {n_pos/max(n_neg,1):.2f}")
     print(f"  Interaction types: {df['interaction_type'].nunique()}")
     print(f"{'─'*40}\n")
-
-
-def validate_twosides_file(path: str) -> dict:
-    """
-    Check a TWOSIDES file before loading — returns a status dict.
-    Called by the Streamlit app to give early feedback to the user.
-
-    Returns
-    -------
-    {
-      "ok":       bool,
-      "format":   str   (detected format name),
-      "columns":  list  (actual columns found),
-      "n_rows":   int   (estimated row count),
-      "error":    str | None,
-      "col_map":  dict  (drug_a, drug_b, side_effect, prr)
-    }
-    """
-    result = {"ok": False, "format": None, "columns": [], "n_rows": 0,
-              "error": None, "col_map": {}}
-    try:
-        header_df = pd.read_csv(path, nrows=0)
-        result["columns"] = list(header_df.columns)
-        col_map = _detect_twosides_columns(result["columns"])
-        result["col_map"] = col_map
-
-        # Estimate row count cheaply
-        sample = pd.read_csv(path, nrows=5000)
-        import os as _os
-        file_size = _os.path.getsize(path)
-        bytes_per_row = file_size / max(len(sample), 1)
-        result["n_rows"] = int(file_size / max(bytes_per_row, 1))
-
-        # Identify format
-        cols_lower = [c.lower() for c in result["columns"]]
-        if "drug_1_concept_name" in cols_lower:
-            result["format"] = "Tatonetti lab original (drug_1_concept_name)"
-        elif "drug1" in cols_lower:
-            result["format"] = "SNAP biodata (Drug1 / Drug2)"
-        elif "stitch_id_1" in cols_lower:
-            result["format"] = "STITCH ID format (numeric IDs — names not lookupable)"
-            result["error"] = (
-                "This file uses STITCH numeric IDs instead of drug names. "
-                "PubChem cannot look up SMILES for numeric IDs. "
-                "Please use the Tatonetti lab or SNAP version with drug names."
-            )
-            return result
-        else:
-            result["format"] = "Unknown / custom"
-
-        result["ok"] = True
-    except Exception as e:
-        result["error"] = str(e)
-    return result
-
-
-def preview_twosides(path: str, n: int = 5) -> pd.DataFrame:
-    """Return the first n rows of a TWOSIDES file for display."""
-    return pd.read_csv(path, nrows=n)
 
 
 if __name__ == "__main__":

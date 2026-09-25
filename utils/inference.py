@@ -1,8 +1,9 @@
 """
 utils/inference.py  —  Inference Engine (used by CLI + Streamlit)
 ──────────────────────────────────────────────────────────────────
-Loads a trained GNN checkpoint and its calibration file, fetches SMILES from
-PubChem if needed, and returns the prediction with attention scores.
+Loads a trained GNN checkpoint and its calibration file, resolves drug names to
+SMILES (local cache first, then PubChem; see utils/drug_lookup.py), and
+returns the model's score with per-molecule attention scores.
 
 What a prediction reports:
   percentile   Where the pair's score falls among validation pairs NOT known to
@@ -15,7 +16,6 @@ What a prediction reports:
 
 import os
 import json
-import requests
 import numpy as np
 import torch
 from rdkit import Chem
@@ -23,6 +23,7 @@ from torch_geometric.data import Batch
 
 from utils.mol_graph import smiles_to_graph
 from utils.calibration import percentile, risk_from_percentile
+from utils.drug_lookup import resolve
 from models.gnn_ddi import DDIPredictor
 
 
@@ -30,34 +31,11 @@ from models.gnn_ddi import DDIPredictor
 _LEGACY_THRESHOLDS = [(0.70, "HIGH"), (0.50, "MEDIUM"), (0.00, "LOW")]
 
 
-COMMON_DRUGS = {
-    "aspirin":           "CC(=O)Oc1ccccc1C(=O)O",
-    "ibuprofen":         "CC(C)Cc1ccc(cc1)C(C)C(=O)O",
-    "paracetamol":       "CC(=O)Nc1ccc(O)cc1",
-    "acetaminophen":     "CC(=O)Nc1ccc(O)cc1",
-    "caffeine":          "CN1C=NC2=C1C(=O)N(C(=O)N2C)C",
-    "metformin":         "CN(C)C(=N)N=C(N)N",
-    "warfarin":          "CC(=O)C(c1ccccc1)C1=C(O)c2ccccc2OC1=O",
-    "simvastatin":       "CCC(C)(C)C(=O)O[C@H]1C[C@@H](C)C=C2C=C[C@H](C)[C@H](CC[C@@H]3C[C@@H](O)CC(=O)O3)C12",
-}
-
-
-def pubchem_smiles(name: str) -> str | None:
-    """Fetch SMILES for a drug name from PubChem, with local fallbacks."""
-    name_clean = name.lower().strip()
-    if name_clean in COMMON_DRUGS:
-        return COMMON_DRUGS[name_clean]
-
-    url = (f"https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/"
-           f"{requests.utils.quote(name)}/property/CanonicalSMILES/JSON")
-    try:
-        r = requests.get(url, timeout=8)
-        if r.status_code == 200:
-            props = r.json().get("PropertyTable", {}).get("Properties", [{}])[0]
-            return props.get("CanonicalSMILES") or props.get("ConnectivitySMILES") or props.get("IsomericSMILES")
-    except Exception:
-        pass
-    return None
+def _not_found(label: str, name: str, suggestions: list) -> str:
+    msg = f"Could not find drug {label} ({name!r}) in the local list or on PubChem."
+    if suggestions:
+        msg += " Did you mean: " + ", ".join(suggestions) + "?"
+    return msg
 
 
 def _canonical(smiles: str) -> str | None:
@@ -153,15 +131,20 @@ class DDIInference:
         """
         from utils.visualize import top_k_atoms
 
-        if smiles_a is None and name_a and fetch_smiles:
-            smiles_a = pubchem_smiles(name_a)
-        if smiles_b is None and name_b and fetch_smiles:
-            smiles_b = pubchem_smiles(name_b)
+        for label, name, smiles in (("A", name_a, smiles_a), ("B", name_b, smiles_b)):
+            if smiles is None and name and fetch_smiles:
+                found = resolve(name)
+                if not found["smiles"]:
+                    return {"error": _not_found(label, name, found["suggestions"])}
+                if label == "A":
+                    smiles_a = found["smiles"]
+                else:
+                    smiles_b = found["smiles"]
 
         if not smiles_a:
-            return {"error": f"Could not resolve SMILES for drug A ({name_a})"}
+            return {"error": "No SMILES or name given for drug A."}
         if not smiles_b:
-            return {"error": f"Could not resolve SMILES for drug B ({name_b})"}
+            return {"error": "No SMILES or name given for drug B."}
 
         g_a = smiles_to_graph(smiles_a)
         g_b = smiles_to_graph(smiles_b)

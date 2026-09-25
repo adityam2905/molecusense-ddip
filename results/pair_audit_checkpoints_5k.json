@@ -1,0 +1,79 @@
+{
+  "checkpoint": "checkpoints_5k",
+  "calibrated": true,
+  "n_drugs": 158,
+  "n_pairs": 12403,
+  "r2_per_drug_logit": 0.8931019964067936,
+  "r2_per_drug_probability": 0.889222980970993,
+  "band_share": {
+    "HIGH": 0.10013706361364186,
+    "MEDIUM": 0.20704668225429332,
+    "LOW": 0.6928162541320648
+  },
+  "top_drugs_by_proneness": [
+    {
+      "name": "Spironolactone",
+      "score": 2.108
+    },
+    {
+      "name": "Tramadol",
+      "score": 1.946
+    },
+    {
+      "name": "Budesonide",
+      "score": 1.711
+    },
+    {
+      "name": "Cetirizine",
+      "score": 1.563
+    },
+    {
+      "name": "Metronidazole",
+      "score": 1.463
+    },
+    {
+      "name": "Dextromethorphan",
+      "score": 1.435
+    },
+    {
+      "name": "Folic Acid",
+      "score": 1.419
+    },
+    {
+      "name": "Methotrexate",
+      "score": 1.341
+    },
+    {
+      "name": "Dihydrocodeine",
+      "score": 1.324
+    },
+    {
+      "name": "Famotidine",
+      "score": 1.321
+    }
+  ],
+  "sanity_pairs": [
+    {
+      "pair": "Aspirin + Ibuprofen",
+      "level": "MEDIUM",
+      "percentile": 87.24035608308606,
+      "probability": 0.6445649044298273
+    },
+    {
+      "pair": "Warfarin + table salt",
+      "level": "MEDIUM",
+      "percentile": 91.49357072205737,
+      "probability": 0.6839977180328503
+    },
+    {
+      "pair": "Metformin + caffeine",
+      "level": "MEDIUM",
+      "percentile": 80.1186943620178,
+      "probability": 0.5979025571427351
+    },
+    {
+      "pair": "Aspirin + aspirin",
+      "error": "Both inputs are the same molecule. A drug-drug interaction needs two different drugs."
+    }
+  ]
+}
