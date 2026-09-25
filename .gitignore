@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
 
 # Virtual environments
 venv/
@@ -15,8 +16,8 @@ venv/
 # Experiment outputs (summaries go to results/, which is committed)
 /experiments/output/
 
-# Model checkpoints are committed (~3 MB) so the deployed app has a trained
-# model; only ignore stray experiment folders.
+# The deployed model in checkpoints/ is committed (~3 MB). Comparison models
+# live in experiments/output/checkpoints/ (ignored above).
 /checkpoints_*/
 
 # OS / IDE

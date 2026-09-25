@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_before",
+  "checkpoint": "original",
   "calibrated": false,
   "n_drugs": 158,
   "n_pairs": 12403,

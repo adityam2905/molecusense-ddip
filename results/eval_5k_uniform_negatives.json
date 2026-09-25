@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_uniform_negatives",
+  "checkpoint": "5k_uniform_negatives",
   "negatives": "uniform",
   "split": "pair",
   "split_sizes": [

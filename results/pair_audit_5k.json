@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_5k",
+  "checkpoint": "5k",
   "calibrated": true,
   "n_drugs": 158,
   "n_pairs": 12403,

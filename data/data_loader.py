@@ -1,25 +1,19 @@
 """
-data/data_loader.py  —  Phase 1: Real Data Pipeline
+data/data_loader.py  —  Loads drug pairs for training
 ─────────────────────────────────────────────────────
-Supports three data sources:
-  1. DrugBank DDI CSV  (download from drugbank.com after free registration)
-  2. TWOSIDES dataset  (Stanford SNAP — polypharmacy side effects)
-  3. Built-in toy set  (instant pipeline verification, no download needed)
+Sources:
+  twosides  TWOSIDES (FDA adverse-event reports): real interacting pairs, plus
+            generated non-interacting pairs (see --negatives in train.py)
+  csv       Your own file with smiles_a, smiles_b, label columns
+  toy       12 hand-written pairs, for checking the pipeline runs
 
-PubChem SMILES lookup is included as a fallback when SMILES are missing.
+Drug names are turned into SMILES with the local list in data/smiles_cache.csv,
+falling back to PubChem.
 
 Usage
 ─────
   from data.data_loader import load_dataset
-
-  # Toy data (works immediately)
-  pairs = load_dataset(source="toy")
-
-  # DrugBank (after download)
-  pairs = load_dataset(source="drugbank", path="data/raw/drugbank_ddi.csv")
-
-  # TWOSIDES
-  pairs = load_dataset(source="twosides", path="data/raw/twosides.csv")
+  pairs = load_dataset(source="twosides", path="data/TWOSIDES.csv.gz")
 """
 
 import os
@@ -103,90 +97,6 @@ def batch_smiles_lookup(names: list[str], cache_path: str = "data/smiles_cache.c
     return cache
 
 
-# ── DrugBank loader ────────────────────────────────────────────────────────────
-
-def load_drugbank(path: str) -> pd.DataFrame:
-    """
-    Load DrugBank DDI export.
-
-    Expected columns (from drugbank full database XML → CSV conversion):
-      Drug1_SMILES, Drug2_SMILES, Interaction_Description
-      OR
-      Drug1_Name, Drug2_Name, Interaction_Description  (SMILES fetched via PubChem)
-
-    Returns DataFrame with: smiles_a, smiles_b, label, interaction_type, name_a, name_b
-    """
-    df = pd.read_csv(path)
-    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
-
-    # Detect whether SMILES or names are present
-    has_smiles = "drug1_smiles" in df.columns and "drug2_smiles" in df.columns
-
-    if has_smiles:
-        df = df.rename(columns={
-            "drug1_smiles": "smiles_a",
-            "drug2_smiles": "smiles_b",
-        })
-    else:
-        # Fetch SMILES from PubChem
-        all_names = list(set(df["drug1_name"].tolist() + df["drug2_name"].tolist()))
-        smiles_map = batch_smiles_lookup(all_names)
-        df["smiles_a"] = df["drug1_name"].map(smiles_map)
-        df["smiles_b"] = df["drug2_name"].map(smiles_map)
-        df = df.rename(columns={"drug1_name": "name_a", "drug2_name": "name_b"})
-
-    # Binary label: all rows in DrugBank are interactions
-    df["label"] = 1
-    df["interaction_type"] = df.get("interaction_description", "Unknown")
-
-    # Generate negative samples (random non-interacting pairs)
-    df = _add_negatives(df)
-
-    return df[["smiles_a", "smiles_b", "label", "interaction_type",
-               "name_a", "name_b"]].dropna(subset=["smiles_a", "smiles_b"])
-
-
-def _add_negatives(df: pd.DataFrame, ratio: float = 1.0) -> pd.DataFrame:
-    """
-    Generate random negative drug pairs at a given positive:negative ratio.
-    Ensures no generated pair exists in the positive set, AND that no two
-    generated negatives are the same pair repeated (a duplicated pair would
-    otherwise risk landing in both train and test after random_split, which
-    is a direct train/test leak of the exact same graphs and label).
-    """
-    pos_set = set(
-        zip(df["smiles_a"].tolist(), df["smiles_b"].tolist())
-    )
-    all_smiles_a = df["smiles_a"].dropna().unique().tolist()
-    all_smiles_b = df["smiles_b"].dropna().unique().tolist()
-
-    n_neg = int(len(df) * ratio)
-    negatives = []
-    seen = set()
-    rng = np.random.default_rng(42)
-
-    attempts = 0
-    while len(negatives) < n_neg and attempts < n_neg * 10:
-        a = rng.choice(all_smiles_a)
-        b = rng.choice(all_smiles_b)
-        key = (a, b) if a <= b else (b, a)
-        if (a, b) not in pos_set and (b, a) not in pos_set and key not in seen:
-            seen.add(key)
-            negatives.append({
-                "smiles_a": a, "smiles_b": b,
-                "label": 0, "interaction_type": "None",
-                "name_a": "", "name_b": "",
-            })
-        attempts += 1
-
-    if len(negatives) < n_neg:
-        print(f"  [warn] Only generated {len(negatives)}/{n_neg} negative pairs "
-              f"after {attempts} attempts.")
-
-    neg_df = pd.DataFrame(negatives)
-    return pd.concat([df, neg_df], ignore_index=True).sample(frac=1, random_state=42)
-
-
 def _generate_negative_name_pairs(
     names: list, exclude_pairs: set, n_neg: int, seed: int = 42, weights=None
 ) -> pd.DataFrame:
@@ -199,8 +109,8 @@ def _generate_negative_name_pairs(
     in negatives as in positives, so "how often a drug shows up in FDA
     reports" stops being a shortcut for the label. None draws uniformly.
 
-    Unlike `_add_negatives`, this is meant to be called with the FULL known-
-    interacting-pair universe as `exclude_pairs`, even when the positive set
+    Call it with the FULL set of known interacting pairs as `exclude_pairs`,
+    even when the positive set
     being labeled has already been subsampled — so a pair that IS a real,
     documented interaction (just not one that was sampled into the positive
     set) never gets mislabeled as a negative.
@@ -683,8 +593,8 @@ def load_dataset(source: str = "toy", path: str = None, max_pairs: int = 10000,
 
     Parameters
     ----------
-    source    : "toy" | "drugbank" | "twosides" | "csv"
-    path      : required for drugbank / csv; auto-detected for twosides
+    source    : "toy" | "twosides" | "csv"
+    path      : required for csv; auto-detected for twosides
     max_pairs : max positive pairs for twosides (default 10,000)
 
     Returns
@@ -701,9 +611,6 @@ def load_dataset(source: str = "toy", path: str = None, max_pairs: int = 10000,
                 "label": label, "interaction_type": itype,
             })
         return pd.DataFrame(rows)
-
-    if source == "drugbank":
-        return load_drugbank(path)
 
     if source == "twosides":
         # Auto-detect common TWOSIDES path if not provided
@@ -734,7 +641,7 @@ def load_dataset(source: str = "toy", path: str = None, max_pairs: int = 10000,
             df["name_b"] = ""
         return df
 
-    raise ValueError(f"Unknown source: {source!r}. Choose: toy, drugbank, twosides, csv")
+    raise ValueError(f"Unknown source: {source!r}. Choose: toy, twosides, csv")
 
 
 # ── Class imbalance analysis ───────────────────────────────────────────────────

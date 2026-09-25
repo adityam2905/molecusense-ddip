@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_balanced_negatives",
+  "checkpoint": "5k_balanced_negatives",
   "negatives": "balanced",
   "split": "pair",
   "split_sizes": [

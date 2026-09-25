@@ -1,8 +1,8 @@
 """
-data/ddi_dataset.py  —  Phase 1 & 2: Dataset + Imbalance Handling
+data/ddi_dataset.py  —  Drug pairs as graph pairs (PyTorch dataset)
 ──────────────────────────────────────────────────────────────────
 Wraps the loaded DataFrame into a PyTorch Dataset.
-Includes weighted sampler to handle class imbalance automatically.
+Also gives pos_weight for class imbalance and a fingerprint of the data.
 """
 
 import hashlib

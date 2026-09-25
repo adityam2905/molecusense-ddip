@@ -1,7 +1,7 @@
 """
 data/splits.py  —  Train / validation / test splits
 ────────────────────────────────────────────────────
-Shared by train.py, experiments/train_rl.py and experiments/evaluate.py so
+Shared by train.py and experiments/evaluate.py so
 every script evaluates on exactly the same pairs.
 
 Two modes:

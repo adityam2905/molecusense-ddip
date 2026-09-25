@@ -143,7 +143,7 @@ class MolGAT(nn.Module):
 
 class DDIPredictor(nn.Module):
     """
-    Full DDI prediction model (Phase 3).
+    Full DDI prediction model.
 
     Shared GAT encoder for both drugs + MLP classifier.
     """

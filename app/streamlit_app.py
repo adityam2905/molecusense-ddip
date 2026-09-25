@@ -251,7 +251,7 @@ def page_info(model):
         return
 
     st.markdown('<div class="result-header">GNN Performance (test AUROC)</div>', unsafe_allow_html=True)
-    drug_split = load_result("eval_checkpoints_drug_split.json")
+    drug_split = load_result("eval_drug_split.json")
     c1, c2, c3 = st.columns(3)
     c1.metric("New pairs of known drugs", f"{model.meta.get('test_auroc', 0):.3f}")
     if drug_split:

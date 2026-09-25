@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_balanced_negatives",
+  "checkpoint": "5k_balanced_negatives",
   "calibrated": true,
   "n_drugs": 158,
   "n_pairs": 12403,

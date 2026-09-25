@@ -1,23 +1,21 @@
 """
-train.py  —  Phase 2 & 5: Full Training Pipeline
-──────────────────────────────────────────────────
-Features:
-  - Weighted sampling + pos_weight for class imbalance (Phase 2)
+train.py  —  Trains the GNN, then calibrates it
+────────────────────────────────────────────────
+  - Class balancing (weighted sampler, or pos_weight if the sampler is off)
   - Validation AUROC, AUPRC, F1, accuracy per epoch
-  - Multi-class interaction type classification (Phase 5)
-  - LR scheduler, early stopping, best-model checkpointing
-  - Training curve plots saved automatically
+  - Early stopping on validation AUROC; the best epoch is kept
+  - Temperature scaling and percentile reference scores (calibration.json)
+  - List of training drugs, so the app can flag new ones (training_drugs.json)
+  - Training curve plot
+  - Optional multi-class mode (interaction type)
 
 Usage
 ─────
-  # TWOSIDES (default — uses data/TWOSIDES.csv.gz)
-  python train.py --epochs 50
-
-  # TWOSIDES with custom sample size
-  python train.py --max_pairs 20000 --epochs 50
+  # Deployed model (uses data/TWOSIDES.csv.gz, 20,000 interacting pairs)
+  python train.py
 
   # Hold out whole drugs (tests drugs never seen in training)
-  python train.py --max_pairs 20000 --split drug --save_dir checkpoints_drug_split
+  python train.py --split drug --save_dir experiments/output/checkpoints/drug_split
 
   # Toy data (instant pipeline verification)
   python train.py --source toy --epochs 50
@@ -54,9 +52,9 @@ from utils.calibration import fit_temperature, calibration_report, band_rates
 # ── Args ───────────────────────────────────────────────────────────────────────
 
 def parse_args():
-    p = argparse.ArgumentParser(description="Train DDI-GNN (Phase 2+5)")
+    p = argparse.ArgumentParser(description="Train the MolecuSense GNN")
     p.add_argument("--source",     default="twosides",
-                   choices=["toy", "drugbank", "twosides", "csv"])
+                   choices=["toy", "twosides", "csv"])
     p.add_argument("--data",       default=None,   help="Path to data file")
     p.add_argument("--max_pairs",  type=int,   default=20000,
                    help="Max positive drug pairs for TWOSIDES (default 20000)")
@@ -82,7 +80,7 @@ def parse_args():
     p.add_argument("--min_delta",  type=float, default=0.002,
                    help="Smallest gain in validation AUROC that counts as an improvement")
     p.add_argument("--multiclass", action="store_true",
-                   help="Classify interaction type (Phase 5)")
+                   help="Classify interaction type instead of yes/no")
     p.add_argument("--save_dir",   default="checkpoints")
     p.add_argument("--no_weighted_sampler", action="store_true")
     return p.parse_args()

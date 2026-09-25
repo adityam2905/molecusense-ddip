@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_5k_drug_split",
+  "checkpoint": "5k_drug_split",
   "negatives": "degree",
   "split": "drug",
   "split_sizes": [

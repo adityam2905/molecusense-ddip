@@ -1,5 +1,5 @@
 {
-  "checkpoint": "checkpoints_5k",
+  "checkpoint": "5k",
   "negatives": "degree",
   "split": "pair",
   "split_sizes": [
